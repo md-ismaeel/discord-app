@@ -1,5 +1,6 @@
 import { sendError, sendBadRequest, sendConflict } from "../utils/response.js";
 import { ERROR_MESSAGES } from "../constants/errorMessages.js";
+import { HTTP_STATUS } from "../constants/httpStatus.js";
 
 export const errorHandler = (err, req, res, next) => {
     console.error("Error:", err);
@@ -27,5 +28,5 @@ export const errorHandler = (err, req, res, next) => {
     }
 
     // Default server error
-    return sendError(res, ERROR_MESSAGES.INTERNAL_SERVER_ERROR, 500);
+    return sendError(res, ERROR_MESSAGES.INTERNAL_SERVER_ERROR, HTTP_STATUS.INTERNAL_SERVER_ERROR);
 };

@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
+import img from "../assets/default-avatar.jpg";
 
 const userSchema = new mongoose.Schema(
     {
@@ -31,7 +32,7 @@ const userSchema = new mongoose.Schema(
         },
         avatar: {
             type: String,
-            default: null,
+            default: img,
         },
         provider: {
             type: String,
@@ -93,8 +94,8 @@ userSchema.pre("save", async function () {
         return;
     }
 
-    const salt = await bcrypt.genSalt(10);
-    this.password = await bcrypt.hash(this.password, salt);
+    const salt = await bcrypt.genSalt(12);
+    this.password = bcrypt.hash(this.password, salt);
 });
 
 // Method to compare passwords
@@ -102,5 +103,12 @@ userSchema.methods.comparePassword = async function (candidatePassword) {
     return await bcrypt.compare(candidatePassword, this.password);
 };
 
-// Create model
+// Remove sensitive data when converting to JSON
+userSchema.methods.toJSON = function () {
+    const obj = this.toObject();
+    delete obj.password;
+    delete obj.__v;
+    return obj;
+};
+
 export const UserModel = mongoose.models.User || mongoose.model("User", userSchema);

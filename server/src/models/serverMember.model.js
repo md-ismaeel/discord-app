@@ -1,4 +1,3 @@
-// src/models/ServerMember.js
 import mongoose from "mongoose";
 
 const serverMemberSchema = new mongoose.Schema(
@@ -13,17 +12,11 @@ const serverMemberSchema = new mongoose.Schema(
             ref: "Server",
             required: true,
         },
-        nickname: {
+        role: {
             type: String,
-            trim: true,
-            default: null,
+            enum: ["owner", "admin", "moderator", "member"],
+            default: "member",
         },
-        roles: [
-            {
-                type: mongoose.Schema.Types.ObjectId,
-                ref: "Role",
-            },
-        ],
         joinedAt: {
             type: Date,
             default: Date.now,
@@ -34,8 +27,6 @@ const serverMemberSchema = new mongoose.Schema(
     }
 );
 
-// Prevent duplicate memberships
 serverMemberSchema.index({ user: 1, server: 1 }, { unique: true });
-serverMemberSchema.index({ server: 1 });
 
 export const ServerMemberModel = mongoose.model("ServerMember", serverMemberSchema);

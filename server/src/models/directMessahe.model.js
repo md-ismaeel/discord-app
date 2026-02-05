@@ -1,4 +1,3 @@
-// src/models/DirectMessage.js
 import mongoose from "mongoose";
 
 const directMessageSchema = new mongoose.Schema(

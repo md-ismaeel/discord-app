@@ -24,6 +24,7 @@ export const ERROR_MESSAGES = {
     SERVER_NAME_REQUIRED: "Server name is required",
     NOT_SERVER_MEMBER: "You are not a member of this server",
     NOT_SERVER_OWNER: "Only the server owner can perform this action",
+    SERVER_OWNER_NOT_LEAVE: "The server owner cannot leave the server without deleting it",
 
     // Channel
     CHANNEL_NOT_FOUND: "Channel not found",
