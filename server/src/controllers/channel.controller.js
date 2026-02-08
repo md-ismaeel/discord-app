@@ -7,7 +7,7 @@ import { ChannelModel } from "../models/channel.model.js";
 import { ServerModel } from "../models/server.model.js";
 import { ServerMemberModel } from "../models/serverMember.model.js";
 import { pubClient } from "../config/redis.config.js";
-import { getIO } from "../config/socket.config.js";
+import { getIO } from "../socket/socketHandler.js";
 
 // ============================================================================
 // REDIS CACHE HELPERS

@@ -1,11 +1,3 @@
-// src/utils/asyncHandler.js
-
-// export const asyncHandler = (fn) => {
-//   return (req, res, next) => {
-//     Promise.resolve(fn(req, res, next)).catch(next);
-//   };
-// };
-
 /**
  * Wraps async route handlers to catch errors and pass them to Express error middleware
  * @param {Function} fn - Async function to wrap
@@ -21,7 +13,6 @@ export const asyncHandler = (fn) => {
     // Ensure fn returns a promise and catch any errors
     Promise.resolve(fn(req, res, next))
       .catch((error) => {
-        // Pass error to Express error handling middleware
         next(error);
       });
   };

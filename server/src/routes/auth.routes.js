@@ -1,16 +1,7 @@
 import express from "express";
 import passport from "passport";
-import { validateBody, validateParams } from "../middlewares/validation.middleware.js";
-import {
-    registerSchema,
-    loginSchema,
-    updateProfileSchema,
-    changePasswordSchema,
-    updateUserStatusSchema,
-    verifyEmailSchema,
-    resetPasswordRequestSchema,
-    resetPasswordSchema,
-} from "../validations/auth.validation.js";
+import { validateBody, validateParams } from "../middlewares/validate.middleware.js";
+import { registerSchema, loginSchema } from "../validations/auth.validation.js";
 import {
     register,
     login,
@@ -19,51 +10,34 @@ import {
     getAuthStatus,
     refreshToken,
 } from "../controllers/auth.controller.js";
-import { protect, optionalAuth } from "../middlewares/auth.middleware.js";
-import { loginRateLimit, registerRateLimit } from "../middlewares/rateLimit.middleware.js";
+import { authenticated, optionalAuth } from "../middlewares/auth.middleware.js";
+import { registerRateLimit, loginRateLimit } from "../middlewares/rateLimit.middleware.js";
 
-const router = express.Router();
-
-
+const authRouter = express.Router();
 
 /**
  * @route   POST /api/v1/auth/register
  * @desc    Register new user with email/password
  * @access  Public
  */
-router.post(
-    "/register",
-    registerRateLimit, // Limit: 3 requests per 15 minutes
-    validateBody(registerSchema),
-    register
-);
+authRouter.post("/register", registerRateLimit, validateBody(registerSchema), register);
 
 /**
  * @route   POST /api/v1/auth/login
  * @desc    Login user with email/password
  * @access  Public
  */
-router.post(
-    "/login",
-    loginRateLimit, // Limit: 5 requests per 15 minutes
-    validateBody(loginSchema),
-    login
-);
+authRouter.post("/login", loginRateLimit, validateBody(loginSchema), login);
 
 /**
  * @route   POST /api/v1/auth/refresh
  * @desc    Refresh access token using refresh token
  * @access  Public (requires refresh token)
  */
-router.post("/refresh", refreshToken);
+authRouter.post("/refresh", refreshToken);
 
 // GOOGLE OAUTH
-/**
- * @route   GET /api/v1/auth/google
- * @desc    Initiate Google OAuth flow
- * @access  Public
- */
-router.get(
+authRouter.get(
     "/google",
     passport.authenticate("google", {
         scope: ["profile", "email"],
@@ -71,12 +45,7 @@ router.get(
     })
 );
 
-/**
- * @route   GET /api/v1/auth/google/callback
- * @desc    Google OAuth callback
- * @access  Public
- */
-router.get(
+authRouter.get(
     "/google/callback",
     passport.authenticate("google", {
         session: false,
@@ -86,12 +55,7 @@ router.get(
 );
 
 // GITHUB OAUTH
-/**
- * @route   GET /api/v1/auth/github
- * @desc    Initiate GitHub OAuth flow
- * @access  Public
- */
-router.get(
+authRouter.get(
     "/github",
     passport.authenticate("github", {
         scope: ["user:email"],
@@ -99,12 +63,7 @@ router.get(
     })
 );
 
-/**
- * @route   GET /api/v1/auth/github/callback
- * @desc    GitHub OAuth callback
- * @access  Public
- */
-router.get(
+authRouter.get(
     "/github/callback",
     passport.authenticate("github", {
         session: false,
@@ -114,12 +73,7 @@ router.get(
 );
 
 // FACEBOOK OAUTH
-/**
- * @route   GET /api/v1/auth/facebook
- * @desc    Initiate Facebook OAuth flow
- * @access  Public
- */
-router.get(
+authRouter.get(
     "/facebook",
     passport.authenticate("facebook", {
         scope: ["email"],
@@ -127,12 +81,7 @@ router.get(
     })
 );
 
-/**
- * @route   GET /api/v1/auth/facebook/callback
- * @desc    Facebook OAuth callback
- * @access  Public
- */
-router.get(
+authRouter.get(
     "/facebook/callback",
     passport.authenticate("facebook", {
         session: false,
@@ -142,18 +91,7 @@ router.get(
 );
 
 // AUTH STATUS & LOGOUT
-/**
- * @route   GET /api/v1/auth/status
- * @desc    Get current authentication status
- * @access  Public (returns user if authenticated)
- */
-router.get("/status", optionalAuth, getAuthStatus);
+authRouter.get("/status", optionalAuth, getAuthStatus);
+authRouter.post("/logout", authenticated, logout);
 
-/**
- * @route   POST /api/v1/auth/logout
- * @desc    Logout current user
- * @access  Private
- */
-router.post("/logout", protect, logout);
-
-export default router;
+export { authRouter };

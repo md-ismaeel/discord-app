@@ -28,7 +28,6 @@ const CLIENT_URL = getEnv("CLIENT_URL");
 
 const app = express();
 
-
 // MIDDLEWARE CONFIGURATION
 const corsOrigin = {
     origin: [CLIENT_URL],
@@ -37,17 +36,43 @@ const corsOrigin = {
     allowedHeaders: ["Content-Type", "Authorization"],
 };
 
-// Security and parsing
+// ============================================
+// CRITICAL: ORDER MATTERS!
+// ============================================
+
+// 1. CORS (FIRST)
 app.use(cors(corsOrigin));
+
+// 2. BODY PARSERS (BEFORE EVERYTHING ELSE)
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+
+// // 🔍 3. DEBUG MIDDLEWARE (to verify body parsing works)
+// app.use((req, res, next) => {
+//     if (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH') {
+//         console.log("\n========== SERVER LEVEL DEBUG ==========");
+//         console.log("URL:", req.url);
+//         console.log("Method:", req.method);
+//         console.log("Content-Type:", req.headers['content-type']);
+//         console.log("Body:", JSON.stringify(req.body, null, 2));
+//         console.log("Body type:", typeof req.body);
+//         console.log("Body is undefined?", req.body === undefined);
+//         console.log("Body keys:", req.body ? Object.keys(req.body) : 'no body');
+//         console.log("========================================\n");
+//     }
+//     next();
+// });
+
+// 3. Security
 app.use(helmet({
     contentSecurityPolicy: isProduction(),
     crossOriginEmbedderPolicy: isProduction(),
 }));
+
+// 4. Cookie Parser
 app.use(cookieParser());
 
-// Session configuration (needed for passport OAuth)
+// 5. Session configuration (needed for passport OAuth)
 app.use(
     session({
         name: "sid",
@@ -63,11 +88,11 @@ app.use(
     })
 );
 
-// Passport initialization
+// 6. Passport initialization
 app.use(passport.initialize());
 app.use(passport.session());
 
-// Health check endpoint
+// 7. Health check endpoint
 app.get("/health", (req, res) => {
     res.status(200).json({
         success: true,
@@ -77,24 +102,24 @@ app.get("/health", (req, res) => {
     });
 });
 
-// API routes
-app.use("/api/v1", routes);
 
-// 404 handler
-app.use("*", (req, res) => {
+// 8. API routes (AFTER ALL MIDDLEWARE)
+app.use("/api/v1/", routes);
+
+// 9. 404 handler
+app.use((req, res) => {
     res.status(404).json({
         success: false,
         message: `Route not found: ${req.method} ${req.originalUrl}`,
     });
 });
 
-// Global error handler (must be last)
+// 10. Global error handler
 app.use(errorHandler);
 
-
 // SERVER STARTUP
-let server;
 let isShuttingDown = false;
+let server = null;
 
 const startServer = async () => {
     try {
@@ -102,23 +127,16 @@ const startServer = async () => {
         console.log(`Environment: ${getEnv("NODE_ENV")}`);
         console.log(`Client URL: ${CLIENT_URL}`);
 
-        // Connect to MongoDB
         await connectDb();
-
-        // Create HTTP server
         server = http.createServer(app);
-
-        // Initialize Socket.IO (now waits for Redis)
         await initSocket(server);
 
-        // Start listening
         server.listen(PORT, () => {
             console.log(`Server running on port ${PORT}`);
             console.log(`API: http://localhost:${PORT}/api/v1`);
             console.log(`Health: http://localhost:${PORT}/health`);
         });
 
-        // Handle server errors
         server.on("error", (error) => {
             if (error.code === "EADDRINUSE") {
                 console.error(`Port ${PORT} is already in use`);
@@ -135,8 +153,6 @@ const startServer = async () => {
     }
 };
 
-
-// GRACEFUL SHUTDOWN
 const gracefulShutdown = async (signal) => {
     if (isShuttingDown) {
         console.log("Shutdown already in progress...");
@@ -146,14 +162,12 @@ const gracefulShutdown = async (signal) => {
     isShuttingDown = true;
     console.log(`\n ${signal} received, starting graceful shutdown...`);
 
-    // Set a timeout for forced shutdown
     const forceShutdownTimeout = setTimeout(() => {
         console.error("Forced shutdown after timeout");
         process.exit(1);
-    }, 15000); // 15 seconds
+    }, 15000);
 
     try {
-        // Stop accepting new connections
         if (server) {
             await new Promise((resolve, reject) => {
                 server.close((err) => {
@@ -168,10 +182,7 @@ const gracefulShutdown = async (signal) => {
             });
         }
 
-        // Close Redis connections
         await closeRedis();
-
-        // Close MongoDB connection
         await mongoose.connection.close();
         console.log("MongoDB connection closed");
 
@@ -186,21 +197,15 @@ const gracefulShutdown = async (signal) => {
     }
 };
 
-// Handle different shutdown signals
 process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
 process.on("SIGINT", () => gracefulShutdown("SIGINT"));
-
-// Handle uncaught exceptions
 process.on("uncaughtException", (error) => {
     console.error("Uncaught Exception:", error);
     gracefulShutdown("UNCAUGHT_EXCEPTION");
 });
-
-// Handle unhandled promise rejections
 process.on("unhandledRejection", (reason, promise) => {
     console.error("Unhandled Rejection at:", promise, "reason:", reason);
     gracefulShutdown("UNHANDLED_REJECTION");
 });
 
-// Start the server
 startServer();

@@ -30,7 +30,7 @@ export const registerSchema = z.object({
         .max(PASSWORD_MAX, `Password cannot exceed ${PASSWORD_MAX} characters`),
     name: z
         .string()
-        .min(NAME_MIN, "Display name is required")
+        .min(NAME_MIN, "Display name is required") // ✅ Fixed message
         .max(NAME_MAX, `Display name cannot exceed ${NAME_MAX} characters`)
         .trim(),
 });
@@ -41,7 +41,8 @@ export const loginSchema = z.object({
         .string()
         .email("Please provide a valid email")
         .toLowerCase()
-        .trim(),
+        .trim()
+        .optional(),
     username: z
         .string()
         .min(USERNAME_MIN, `Username must be at least ${USERNAME_MIN} characters`)

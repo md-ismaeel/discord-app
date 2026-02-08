@@ -8,38 +8,31 @@ import { ServerMemberModel } from "../models/serverMember.model.js";
 import { ServerModel } from "../models/server.model.js";
 import { HTTP_STATUS } from "../constants/httpStatus.js";
 import { pubClient } from "../config/redis.config.js";
-import { getIO } from "../config/socket.config.js";
+import { getIO } from "../socket/socketHandler.js";
+import { validateObjectId } from "../utils/validateObjId.js";
 
-// ============================================================================
-// CURRENT USER PROFILE
-// ============================================================================
 
 /**
  * @desc    Get current user profile
- * @route   GET /api/v1/users/me
- * @access  Private
  */
 export const getMe = asyncHandler(async (req, res) => {
-    // User is already attached to req by protect middleware
-    const user = await UserModel.findById(req.user._id)
+
+    const userId = validateObjectId(req.user._id);
+
+    const user = await UserModel.findById(userId)
         .select("-password")
         .populate("friends", "username name avatar status customStatus")
         .lean();
 
     if (!user) {
-        throw createApiError(
-            HTTP_STATUS.NOT_FOUND,
-            ERROR_MESSAGES.USER_NOT_FOUND
-        );
+        throw createApiError(HTTP_STATUS.NOT_FOUND, ERROR_MESSAGES.USER_NOT_FOUND);
     }
 
-    sendSuccess(res, user);
+    sendSuccess(res, user, SUCCESS_MESSAGES.GET_PROFILE_SUCCESS, HTTP_STATUS.OK);
 });
 
 /**
  * @desc    Update current user profile
- * @route   PATCH /api/v1/users/me
- * @access  Private
  */
 export const updateProfile = asyncHandler(async (req, res) => {
     const { name, username, bio, avatar } = req.body;
@@ -47,20 +40,14 @@ export const updateProfile = asyncHandler(async (req, res) => {
     const user = await UserModel.findById(req.user._id);
 
     if (!user) {
-        throw createApiError(
-            HTTP_STATUS.NOT_FOUND,
-            ERROR_MESSAGES.USER_NOT_FOUND
-        );
+        throw createApiError(HTTP_STATUS.NOT_FOUND, ERROR_MESSAGES.USER_NOT_FOUND);
     }
 
     // Check if username is taken (if trying to change it)
     if (username && username !== user.username) {
         const existingUser = await UserModel.findOne({ username });
         if (existingUser) {
-            throw createApiError(
-                HTTP_STATUS.CONFLICT,
-                ERROR_MESSAGES.USERNAME_TAKEN
-            );
+            throw createApiError(HTTP_STATUS.CONFLICT, ERROR_MESSAGES.USERNAME_TAKEN);
         }
         user.username = username;
     }
@@ -97,8 +84,6 @@ export const updateProfile = asyncHandler(async (req, res) => {
 
 /**
  * @desc    Change user password
- * @route   PATCH /api/v1/users/me/password
- * @access  Private
  */
 export const changePassword = asyncHandler(async (req, res) => {
     const { currentPassword, newPassword } = req.body;
@@ -107,28 +92,19 @@ export const changePassword = asyncHandler(async (req, res) => {
     const user = await UserModel.findById(req.user._id).select("+password");
 
     if (!user) {
-        throw createApiError(
-            HTTP_STATUS.NOT_FOUND,
-            ERROR_MESSAGES.USER_NOT_FOUND
-        );
+        throw createApiError(HTTP_STATUS.NOT_FOUND, ERROR_MESSAGES.USER_NOT_FOUND);
     }
 
     // Check if user registered with email (not OAuth)
     if (user.provider !== "email") {
-        throw createApiError(
-            HTTP_STATUS.BAD_REQUEST,
-            `Cannot change password for ${user.provider} accounts`
-        );
+        throw createApiError(HTTP_STATUS.BAD_REQUEST, `Cannot change password for ${user.provider} accounts`);
     }
 
     // Verify current password
     const isPasswordValid = await user.comparePassword(currentPassword);
 
     if (!isPasswordValid) {
-        throw createApiError(
-            HTTP_STATUS.UNAUTHORIZED,
-            "Current password is incorrect"
-        );
+        throw createApiError(HTTP_STATUS.UNAUTHORIZED, "Entered password is incorrect");
     }
 
     // Update password
@@ -140,26 +116,20 @@ export const changePassword = asyncHandler(async (req, res) => {
 
 /**
  * @desc    Delete user account
- * @route   DELETE /api/v1/users/me
- * @access  Private
  */
 export const deleteAccount = asyncHandler(async (req, res) => {
-    const userId = req.user._id;
+    const userId = validateObjectId(req.user._id);
 
     // Find all servers owned by user
     const ownedServers = await ServerModel.find({ owner: userId });
 
     if (ownedServers.length > 0) {
-        throw createApiError(
-            HTTP_STATUS.BAD_REQUEST,
-            "You must delete or transfer ownership of all your servers before deleting your account"
-        );
+        throw createApiError(HTTP_STATUS.BAD_REQUEST, "You must delete or transfer ownership of all your servers before deleting your account");
     }
 
     // Remove user from all server memberships
     await ServerMemberModel.deleteMany({ user: userId });
 
-    // Delete user
     await UserModel.findByIdAndDelete(userId);
 
     // Clear any cached data
@@ -170,8 +140,6 @@ export const deleteAccount = asyncHandler(async (req, res) => {
 
 /**
  * @desc    Upload user avatar
- * @route   POST /api/v1/users/me/avatar
- * @access  Private
  */
 export const uploadAvatar = asyncHandler(async (req, res) => {
     if (!req.file) {
@@ -182,8 +150,10 @@ export const uploadAvatar = asyncHandler(async (req, res) => {
     // and adds the URL to req.file.location or req.file.path
     const avatarUrl = req.file.location || req.file.path;
 
+    const userId = validateObjectId(req.user._id)
+
     const user = await UserModel.findByIdAndUpdate(
-        req.user._id,
+        userId,
         { avatar: avatarUrl },
         { new: true, runValidators: true }
     ).select("-password");
@@ -206,20 +176,15 @@ export const uploadAvatar = asyncHandler(async (req, res) => {
     sendSuccess(res, { avatar: avatarUrl }, "Avatar uploaded successfully");
 });
 
-// ============================================================================
-// USER STATUS
-// ============================================================================
-
 /**
  * @desc    Update user status
- * @route   PATCH /api/v1/users/me/status
- * @access  Private
  */
 export const updateStatus = asyncHandler(async (req, res) => {
     const { status, customStatus } = req.body;
+    const userId = validateObjectId(req.user._id)
 
     const user = await UserModel.findByIdAndUpdate(
-        req.user._id,
+        userId,
         {
             status,
             customStatus: customStatus || "",
@@ -247,35 +212,28 @@ export const updateStatus = asyncHandler(async (req, res) => {
     sendSuccess(res, user, "Status updated successfully");
 });
 
-// ============================================================================
-// GET OTHER USERS
-// ============================================================================
 
 /**
  * @desc    Get user by ID
- * @route   GET /api/v1/users/:id
- * @access  Private
  */
 export const getUserById = asyncHandler(async (req, res) => {
     const { id } = req.params;
+    const userId = validateObjectId(id)
 
     // Try cache first
-    const cacheKey = `user:${id}`;
+    const cacheKey = `user:${userId}`;
     const cached = await pubClient.get(cacheKey);
 
     if (cached) {
         return sendSuccess(res, JSON.parse(cached));
     }
 
-    const user = await UserModel.findById(id)
+    const user = await UserModel.findById(userId)
         .select("-password")
         .lean();
 
     if (!user) {
-        throw createApiError(
-            HTTP_STATUS.NOT_FOUND,
-            ERROR_MESSAGES.USER_NOT_FOUND
-        );
+        throw createApiError(HTTP_STATUS.NOT_FOUND, ERROR_MESSAGES.USER_NOT_FOUND);
     }
 
     // Cache for 30 minutes
@@ -286,8 +244,6 @@ export const getUserById = asyncHandler(async (req, res) => {
 
 /**
  * @desc    Search for users
- * @route   GET /api/v1/users/search?q=username
- * @access  Private
  */
 export const searchUsers = asyncHandler(async (req, res) => {
     const { q, page = 1, limit = 20 } = req.query;
@@ -328,9 +284,6 @@ export const searchUsers = asyncHandler(async (req, res) => {
     });
 });
 
-// ============================================================================
-// USER SERVERS
-// ============================================================================
 
 /**
  * @desc    Get all servers user is a member of
@@ -338,6 +291,8 @@ export const searchUsers = asyncHandler(async (req, res) => {
  * @access  Private
  */
 export const getUserServers = asyncHandler(async (req, res) => {
+    const userId = validateObjectId(req.user._id)
+    
     const cacheKey = `user:${req.user._id}:servers`;
 
     // Try cache first

@@ -1,7 +1,8 @@
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendSuccess, sendCreated } from "../utils/response.js";
 import { createApiError } from "../utils/ApiError.js";
-import { generateToken } from "../utils/jwt.js";
+import { generateToken, verifyToken } from "../utils/jwt.js";
+import { hashPassword, comparePassword } from "../utils/bcrypt.js";
 import { ERROR_MESSAGES } from "../constants/errorMessages.js";
 import { SUCCESS_MESSAGES } from "../constants/successMessages.js";
 import { getEnv } from "../config/env.config.js";
@@ -9,48 +10,40 @@ import { UserModel } from "../models/user.model.js";
 import { setTokenCookie } from "../utils/setTokenCookie.js";
 import { blacklistToken, isTokenBlacklisted } from "../utils/redis.js";
 import { HTTP_STATUS } from "../constants/httpStatus.js";
+import { validateObjectId } from "../utils/validateObjId.js";
+import {recordLoginAttempt,clearLoginAttempts,recordRegisterAttempt,clearRegisterAttempts} from "../middlewares/rateLimit.middleware.js";
 
-// ============================================================================
-// REGISTRATION
-// ============================================================================
-
-/**
+/*
  * @desc    Register new user with email/password
- * @route   POST /api/v1/auth/register
- * @access  Public
  */
 export const register = asyncHandler(async (req, res) => {
     const { name, email, password, username } = req.body;
+    const clientIp = req.clientIp || req.ip;
 
-    // Check if user already exists with this email
+    // Check if user already exists
     const existingUser = await UserModel.findOne({ email });
-
     if (existingUser) {
-        throw createApiError(
-            HTTP_STATUS.CONFLICT,
-            ERROR_MESSAGES.USER_ALREADY_EXISTS
-        );
+        await recordRegisterAttempt(clientIp);
+        throw createApiError(HTTP_STATUS.CONFLICT, ERROR_MESSAGES.USER_ALREADY_EXISTS);
     }
 
     // Check if username is taken (if provided)
     if (username) {
-        // ⚠️ CRITICAL FIX: Your original query was wrong!
-        // You were checking: { username, email } - this checks if BOTH match
-        // Should check: { username } only - to see if username is taken
         const usernameTaken = await UserModel.findOne({ username });
         if (usernameTaken) {
-            throw createApiError(
-                HTTP_STATUS.CONFLICT,
-                ERROR_MESSAGES.USERNAME_TAKEN
-            );
+            await recordRegisterAttempt(clientIp);
+            throw createApiError(HTTP_STATUS.CONFLICT, ERROR_MESSAGES.USERNAME_TAKEN);
         }
     }
+
+    // Hash password in controller
+    const hashedPassword = await hashPassword(password);
 
     // Create user
     const user = await UserModel.create({
         name,
         email,
-        password,
+        password: hashedPassword,
         username,
         provider: "email",
         status: "online",
@@ -61,10 +54,11 @@ export const register = asyncHandler(async (req, res) => {
     const userResponse = await UserModel.findById(user._id).select("-password");
 
     // Generate token
-    // ⚠️ CRITICAL FIX: Your original code passed the whole user object
-    // Should pass just the user ID
     const token = generateToken(userResponse._id);
     setTokenCookie(res, token);
+
+    // Clear registration attempts on success
+    await clearRegisterAttempts(clientIp);
 
     return sendCreated(
         res,
@@ -73,17 +67,12 @@ export const register = asyncHandler(async (req, res) => {
     );
 });
 
-// ============================================================================
-// LOGIN
-// ============================================================================
-
-/**
+/*
  * @desc    Login user with email/password
- * @route   POST /api/v1/auth/login
- * @access  Public
  */
 export const login = asyncHandler(async (req, res) => {
     const { email, username, password } = req.body;
+    const clientIp = req.clientIp || req.ip;
 
     // Build query - user can login with either email or username
     const query = email ? { email } : { username };
@@ -92,28 +81,25 @@ export const login = asyncHandler(async (req, res) => {
     const user = await UserModel.findOne(query).select("+password");
 
     if (!user) {
-        throw createApiError(
-            HTTP_STATUS.UNAUTHORIZED,
-            ERROR_MESSAGES.INVALID_CREDENTIALS
-        );
+        await recordLoginAttempt(clientIp);
+        throw createApiError(HTTP_STATUS.UNAUTHORIZED, ERROR_MESSAGES.INVALID_CREDENTIALS);
     }
 
     // Check if user registered with email (not OAuth)
     if (user.provider !== "email") {
+        await recordLoginAttempt(clientIp);
         throw createApiError(
             HTTP_STATUS.BAD_REQUEST,
             `This account is registered with ${user.provider}. Please login using ${user.provider}.`
         );
     }
 
-    // Verify password
-    const isPasswordValid = await user.comparePassword(password);
+    // Verify password using utility function
+    const isPasswordValid = await comparePassword(password, user.password);
 
     if (!isPasswordValid) {
-        throw createApiError(
-            HTTP_STATUS.UNAUTHORIZED,
-            ERROR_MESSAGES.INVALID_CREDENTIALS
-        );
+        await recordLoginAttempt(clientIp);
+        throw createApiError(HTTP_STATUS.UNAUTHORIZED, ERROR_MESSAGES.INVALID_CREDENTIALS);
     }
 
     // Update status to online and last seen
@@ -129,6 +115,9 @@ export const login = asyncHandler(async (req, res) => {
     // Return user without password
     const userResponse = await UserModel.findById(user._id).select("-password");
 
+    // Clear login attempts on success
+    await clearLoginAttempts(clientIp);
+
     return sendSuccess(
         res,
         { user: userResponse, token },
@@ -136,31 +125,24 @@ export const login = asyncHandler(async (req, res) => {
     );
 });
 
-// ============================================================================
-// OAUTH CALLBACK
-// ============================================================================
-
-/**
+/*
  * @desc    OAuth callback handler (Google/GitHub/Facebook)
- * @route   GET /api/v1/auth/:provider/callback
- * @access  Public
  */
 export const oauthCallback = asyncHandler(async (req, res) => {
     if (!req.user) {
-        throw createApiError(
-            HTTP_STATUS.UNAUTHORIZED,
-            ERROR_MESSAGES.UNAUTHORIZED
-        );
+        throw createApiError(HTTP_STATUS.UNAUTHORIZED, ERROR_MESSAGES.UNAUTHORIZED);
     }
 
+    const userId = validateObjectId(req.user._id);
+
     // Update status to online and last seen
-    await UserModel.findByIdAndUpdate(req.user._id, {
+    await UserModel.findByIdAndUpdate(userId, {
         status: "online",
         lastSeen: new Date(),
     });
 
     // Generate token
-    const token = generateToken(req.user._id);
+    const token = generateToken(userId);
     setTokenCookie(res, token);
 
     // Redirect to frontend
@@ -168,14 +150,8 @@ export const oauthCallback = asyncHandler(async (req, res) => {
     res.redirect(`${clientUrl}/auth/success?token=${token}`);
 });
 
-// ============================================================================
-// LOGOUT
-// ============================================================================
-
-/**
+/*
  * @desc    Logout user
- * @route   POST /api/v1/auth/logout
- * @access  Private
  */
 export const logout = asyncHandler(async (req, res) => {
     // Get token from cookie or header
@@ -186,8 +162,10 @@ export const logout = asyncHandler(async (req, res) => {
         await blacklistToken(token, 604800);
     }
 
+    const userId = validateObjectId(req.user._id);
+
     // Update user status to offline
-    await UserModel.findByIdAndUpdate(req.user._id, {
+    await UserModel.findByIdAndUpdate(userId, {
         status: "offline",
         lastSeen: new Date()
     });
@@ -202,21 +180,15 @@ export const logout = asyncHandler(async (req, res) => {
     return sendSuccess(res, null, SUCCESS_MESSAGES.LOGOUT_SUCCESS);
 });
 
-// ============================================================================
-// AUTH STATUS
-// ============================================================================
-
-/**
+/*
  * @desc    Get authentication status
- * @route   GET /api/v1/auth/status
- * @access  Public (but returns user if authenticated)
  */
 export const getAuthStatus = asyncHandler(async (req, res) => {
     if (req.user) {
         return sendSuccess(res, {
             isAuthenticated: true,
             user: req.user,
-        });
+        }, SUCCESS_MESSAGES.AUTH_STATUS_SUCCESS);
     }
 
     return sendSuccess(res, {
@@ -225,52 +197,34 @@ export const getAuthStatus = asyncHandler(async (req, res) => {
     });
 });
 
-// ============================================================================
-// REFRESH TOKEN (Optional - Recommended)
-// ============================================================================
-
-/**
+/*
  * @desc    Refresh access token
- * @route   POST /api/v1/auth/refresh
- * @access  Public (with refresh token)
  */
 export const refreshToken = asyncHandler(async (req, res) => {
     const refreshToken = req.cookies.refreshToken || req.body.refreshToken;
 
     if (!refreshToken) {
-        throw createApiError(
-            HTTP_STATUS.UNAUTHORIZED,
-            "Refresh token required"
-        );
+        throw createApiError(HTTP_STATUS.UNAUTHORIZED, "Refresh token required");
     }
 
     // Verify refresh token
     const decoded = verifyToken(refreshToken);
 
     if (!decoded) {
-        throw createApiError(
-            HTTP_STATUS.UNAUTHORIZED,
-            "Invalid refresh token"
-        );
+        throw createApiError(HTTP_STATUS.UNAUTHORIZED, "Invalid refresh token");
     }
 
     // Check if token is blacklisted
     const isBlacklisted = await isTokenBlacklisted(refreshToken);
     if (isBlacklisted) {
-        throw createApiError(
-            HTTP_STATUS.UNAUTHORIZED,
-            "Refresh token has been invalidated"
-        );
+        throw createApiError(HTTP_STATUS.UNAUTHORIZED, "Refresh token has been invalidated");
     }
 
-    // Get user
+    // Get user - use decoded.userId (matching what we put in generateToken)
     const user = await UserModel.findById(decoded.userId);
 
     if (!user) {
-        throw createApiError(
-            HTTP_STATUS.UNAUTHORIZED,
-            ERROR_MESSAGES.USER_NOT_FOUND
-        );
+        throw createApiError(HTTP_STATUS.UNAUTHORIZED, ERROR_MESSAGES.USER_NOT_FOUND);
     }
 
     // Generate new access token
@@ -279,12 +233,3 @@ export const refreshToken = asyncHandler(async (req, res) => {
 
     return sendSuccess(res, { token: newToken }, "Token refreshed successfully");
 });
-
-export default {
-    register,
-    login,
-    oauthCallback,
-    logout,
-    getAuthStatus,
-    refreshToken,
-};

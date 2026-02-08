@@ -1,15 +1,37 @@
 import express from "express";
-import { authenticate } from "../middlewares/auth.middleware.js";
-import { validateBody, validateParams, validate } from "../middlewares/validation.middleware.js";
+import { authenticated } from "../middlewares/auth.middleware.js";
+import {
+  validateBody,
+  validateParams,
+  validate,
+} from "../middlewares/validate.middleware.js";
 import * as serverController from "../controllers/server.controller.js";
 import * as channelController from "../controllers/channel.controller.js";
-import { createServerSchema, updateServerSchema, serverIdParamSchema, } from "../validations/server.validation.js";
-import { createChannelSchema, updateChannelSchema, channelIdParamSchema, } from "../validations/channel.validation.js"
-import { updateMemberRoleSchema, memberIdParamSchema, createInviteSchema, joinServerSchema } from "../validations/serverMember.validation.js"
-import { createInviteSchema, joinServerSchema } from "../validations/invite.validation.js"
+import {
+  createServerSchema,
+  updateServerSchema,
+  serverIdParamSchema,
+} from "../validations/server.validation.js";
+import {
+  createChannelSchema,
+  updateChannelSchema,
+  channelIdParamSchema,
+} from "../validations/channel.validation.js";
+import {
+  updateMemberRoleSchema,
+  memberIdParamSchema,
+} from "../validations/serverMember.validation.js";
+import {
+  createInviteSchema,
+  joinServerSchema,
+} from "../validations/invite.validation.js";
 
+const serverRouter = express.Router();
 
-const router = express.Router();
+// ============================================================================
+// ALL ROUTES REQUIRE AUTHENTICATION
+// ============================================================================
+serverRouter.use(authenticated); // Apply authentication to all routes below
 
 // ============================================================================
 // SERVER ROUTES
@@ -20,11 +42,10 @@ const router = express.Router();
  * @desc    Create a new server
  * @access  Private
  */
-router.post(
-    "/",
-    authenticate,
-    validateBody(createServerSchema),
-    serverController.createServer
+serverRouter.post(
+  "/",
+  validateBody(createServerSchema),
+  serverController.createServer
 );
 
 /**
@@ -32,34 +53,28 @@ router.post(
  * @desc    Get all servers for current user
  * @access  Private
  */
-router.get(
-    "/",
-    authenticate,
-    serverController.getUserServers
-);
+serverRouter.get("/", serverController.getUserServers);
 
 /**
  * @route   POST /api/v1/servers/join
  * @desc    Join server using invite code
  * @access  Private
  */
-router.post(
-    "/join",
-    authenticate,
-    validateBody(joinServerSchema),
-    serverController.joinServer
-);
+// serverRouter.post(
+//   "/join",
+//   validateBody(joinServerSchema),
+//   serverController.joinServer
+// );
 
 /**
  * @route   GET /api/v1/servers/:serverId
  * @desc    Get server by ID
  * @access  Private
  */
-router.get(
-    "/:serverId",
-    authenticate,
-    validateParams(serverIdParamSchema),
-    serverController.getServer
+serverRouter.get(
+  "/:serverId",
+  validateParams(serverIdParamSchema),
+  serverController.getServer
 );
 
 /**
@@ -67,11 +82,11 @@ router.get(
  * @desc    Update server
  * @access  Private (Owner or Admin)
  */
-router.patch(
-    "/:serverId",
-    authenticate,
-    validate(updateServerSchema, serverIdParamSchema),
-    serverController.updateServer
+serverRouter.patch(
+  "/:serverId",
+  validateParams(serverIdParamSchema),
+  validateBody(updateServerSchema),
+  serverController.updateServer
 );
 
 /**
@@ -79,11 +94,10 @@ router.patch(
  * @desc    Delete server
  * @access  Private (Owner only)
  */
-router.delete(
-    "/:serverId",
-    authenticate,
-    validateParams(serverIdParamSchema),
-    serverController.deleteServer
+serverRouter.delete(
+  "/:serverId",
+  validateParams(serverIdParamSchema),
+  serverController.deleteServer
 );
 
 /**
@@ -91,11 +105,10 @@ router.delete(
  * @desc    Leave server
  * @access  Private
  */
-router.post(
-    "/:serverId/leave",
-    authenticate,
-    validateParams(serverIdParamSchema),
-    serverController.leaveServer
+serverRouter.post(
+  "/:serverId/leave",
+  validateParams(serverIdParamSchema),
+  serverController.leaveServer
 );
 
 // ============================================================================
@@ -107,11 +120,10 @@ router.post(
  * @desc    Get all members of a server
  * @access  Private (Members only)
  */
-router.get(
-    "/:serverId/members",
-    authenticate,
-    validateParams(serverIdParamSchema),
-    serverController.getServerMembers
+serverRouter.get(
+  "/:serverId/members",
+  validateParams(serverIdParamSchema),
+  serverController.getServerMembers
 );
 
 /**
@@ -119,12 +131,11 @@ router.get(
  * @desc    Update member role
  * @access  Private (Owner or Admin)
  */
-router.patch(
-    "/:serverId/members/:memberId/role",
-    authenticate,
-    validateParams(serverIdParamSchema),
-    validateBody(updateMemberRoleSchema),
-    serverController.updateMemberRole
+serverRouter.patch(
+  "/:serverId/members/:memberId/role",
+  validateParams(serverIdParamSchema),
+  validateBody(updateMemberRoleSchema),
+  serverController.updateMemberRole
 );
 
 /**
@@ -132,12 +143,10 @@ router.patch(
  * @desc    Kick member from server
  * @access  Private (Owner, Admin, or Moderator)
  */
-router.delete(
-    "/:serverId/members/:memberId",
-    authenticate,
-    validateParams(serverIdParamSchema),
-    validateBody(kickMemberSchema),
-    serverController.kickMember
+serverRouter.delete(
+  "/:serverId/members/:memberId",
+  validateParams(serverIdParamSchema),
+  serverController.kickMember
 );
 
 // ============================================================================
@@ -149,13 +158,12 @@ router.delete(
  * @desc    Create server invite
  * @access  Private (Members with createInvite permission)
  */
-router.post(
-    "/:serverId/invites",
-    authenticate,
-    validateParams(serverIdParamSchema),
-    validateBody(createInviteSchema),
-    serverController.createInvite
-);
+// serverRouter.post(
+//   "/:serverId/invites",
+//   validateParams(serverIdParamSchema),
+//   validateBody(createInviteSchema),
+//   serverController.createInvite
+// );
 
 // ============================================================================
 // CHANNEL ROUTES (nested under servers)
@@ -166,12 +174,11 @@ router.post(
  * @desc    Create a new channel
  * @access  Private (Owner, Admin, or Moderator)
  */
-router.post(
-    "/:serverId/channels",
-    authenticate,
-    validateParams(serverIdParamSchema),
-    validateBody(createChannelSchema),
-    channelController.createChannel
+serverRouter.post(
+  "/:serverId/channels",
+  validateParams(serverIdParamSchema),
+  validateBody(createChannelSchema),
+  channelController.createChannel
 );
 
 /**
@@ -179,11 +186,10 @@ router.post(
  * @desc    Get all channels in a server
  * @access  Private (Members only)
  */
-router.get(
-    "/:serverId/channels",
-    authenticate,
-    validateParams(serverIdParamSchema),
-    channelController.getServerChannels
+serverRouter.get(
+  "/:serverId/channels",
+  validateParams(serverIdParamSchema),
+  channelController.getServerChannels
 );
 
 /**
@@ -191,11 +197,10 @@ router.get(
  * @desc    Reorder channels
  * @access  Private (Owner, Admin, or Moderator)
  */
-router.patch(
-    "/:serverId/channels/reorder",
-    authenticate,
-    validateParams(serverIdParamSchema),
-    channelController.reorderChannels
+serverRouter.patch(
+  "/:serverId/channels/reorder",
+  validateParams(serverIdParamSchema),
+  channelController.reorderChannels
 );
 
 // ============================================================================
@@ -203,39 +208,37 @@ router.patch(
 // ============================================================================
 
 /**
- * @route   GET /api/v1/channels/:channelId
+ * @route   GET /api/v1/servers/channels/:channelId
  * @desc    Get channel by ID
  * @access  Private (Members only)
  */
-router.get(
-    "/channels/:channelId",
-    authenticate,
-    validateParams(channelIdParamSchema),
-    channelController.getChannel
+serverRouter.get(
+  "/channels/:channelId",
+  validateParams(channelIdParamSchema),
+  channelController.getChannel
 );
 
 /**
- * @route   PATCH /api/v1/channels/:channelId
+ * @route   PATCH /api/v1/servers/channels/:channelId
  * @desc    Update channel
  * @access  Private (Owner, Admin, or Moderator)
  */
-router.patch(
-    "/channels/:channelId",
-    authenticate,
-    validate(updateChannelSchema, channelIdParamSchema),
-    channelController.updateChannel
+serverRouter.patch(
+  "/channels/:channelId",
+  validateParams(channelIdParamSchema),
+  validateBody(updateChannelSchema),
+  channelController.updateChannel
 );
 
 /**
- * @route   DELETE /api/v1/channels/:channelId
+ * @route   DELETE /api/v1/servers/channels/:channelId
  * @desc    Delete channel
  * @access  Private (Owner or Admin)
  */
-router.delete(
-    "/channels/:channelId",
-    authenticate,
-    validateParams(channelIdParamSchema),
-    channelController.deleteChannel
+serverRouter.delete(
+  "/channels/:channelId",
+  validateParams(channelIdParamSchema),
+  channelController.deleteChannel
 );
 
-export default router;
+export { serverRouter };

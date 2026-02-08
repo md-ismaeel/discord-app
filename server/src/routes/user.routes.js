@@ -1,11 +1,9 @@
 import express from "express";
-import { validateBody, validateParams, validateQuery } from "../middlewares/validation.middleware.js";
+import { validateBody, validateParams, validateQuery } from "../middlewares/validate.middleware.js";
 import {
     updateProfileSchema,
     changePasswordSchema,
     updateUserStatusSchema,
-    serverIdParamSchema,
-    paginationSchema,
 } from "../validations/auth.validation.js";
 import {
     getMe,
@@ -24,15 +22,16 @@ import {
     unblockUser,
     getBlockedUsers,
 } from "../controllers/user.controller.js";
-import { protect, checkOwnership } from "../middlewares/auth.middleware.js";
+import { authenticated, checkOwnership } from "../middlewares/auth.middleware.js";
 import { upload } from "../middlewares/upload.middleware.js";
+import { z } from "zod";
 
-const router = express.Router();
+const userRouter = express.Router();
 
 // ============================================================================
 // AUTHENTICATION REQUIRED FOR ALL ROUTES
 // ============================================================================
-router.use(protect);
+userRouter.use(authenticated);
 
 // ============================================================================
 // CURRENT USER PROFILE
@@ -43,14 +42,14 @@ router.use(protect);
  * @desc    Get current user profile
  * @access  Private
  */
-router.get("/me", getMe);
+userRouter.get("/me", getMe);
 
 /**
  * @route   PATCH /api/v1/users/me
  * @desc    Update current user profile
  * @access  Private
  */
-router.patch(
+userRouter.patch(
     "/me",
     validateBody(updateProfileSchema),
     updateProfile
@@ -61,14 +60,14 @@ router.patch(
  * @desc    Delete current user account
  * @access  Private
  */
-router.delete("/me", deleteAccount);
+userRouter.delete("/me", deleteAccount);
 
 /**
  * @route   POST /api/v1/users/me/avatar
  * @desc    Upload user avatar
  * @access  Private
  */
-router.post(
+userRouter.post(
     "/me/avatar",
     upload.single("avatar"), // multer middleware for file upload
     uploadAvatar
@@ -79,7 +78,7 @@ router.post(
  * @desc    Change user password
  * @access  Private
  */
-router.patch(
+userRouter.patch(
     "/me/password",
     validateBody(changePasswordSchema),
     changePassword
@@ -94,7 +93,7 @@ router.patch(
  * @desc    Update user status (online/offline/away/dnd)
  * @access  Private
  */
-router.patch(
+userRouter.patch(
     "/me/status",
     validateBody(updateUserStatusSchema),
     updateStatus
@@ -109,7 +108,7 @@ router.patch(
  * @desc    Get all servers current user is a member of
  * @access  Private
  */
-router.get("/me/servers", getUserServers);
+userRouter.get("/me/servers", getUserServers);
 
 // ============================================================================
 // FRIENDS & SOCIAL
@@ -120,14 +119,14 @@ router.get("/me/servers", getUserServers);
  * @desc    Get user's friends list
  * @access  Private
  */
-router.get("/me/friends", getFriends);
+userRouter.get("/me/friends", getFriends);
 
 /**
  * @route   POST /api/v1/users/me/friends/:userId
  * @desc    Add a friend
  * @access  Private
  */
-router.post(
+userRouter.post(
     "/me/friends/:userId",
     validateParams(z.object({
         userId: z.string().regex(/^[0-9a-fA-F]{24}$/)
@@ -140,7 +139,7 @@ router.post(
  * @desc    Remove a friend
  * @access  Private
  */
-router.delete(
+userRouter.delete(
     "/me/friends/:userId",
     validateParams(z.object({
         userId: z.string().regex(/^[0-9a-fA-F]{24}$/)
@@ -157,14 +156,14 @@ router.delete(
  * @desc    Get list of blocked users
  * @access  Private
  */
-router.get("/me/blocked", getBlockedUsers);
+userRouter.get("/me/blocked", getBlockedUsers);
 
 /**
  * @route   POST /api/v1/users/me/blocked/:userId
  * @desc    Block a user
  * @access  Private
  */
-router.post(
+userRouter.post(
     "/me/blocked/:userId",
     validateParams(z.object({
         userId: z.string().regex(/^[0-9a-fA-F]{24}$/)
@@ -177,7 +176,7 @@ router.post(
  * @desc    Unblock a user
  * @access  Private
  */
-router.delete(
+userRouter.delete(
     "/me/blocked/:userId",
     validateParams(z.object({
         userId: z.string().regex(/^[0-9a-fA-F]{24}$/)
@@ -194,7 +193,7 @@ router.delete(
  * @desc    Search for users by username or email
  * @access  Private
  */
-router.get(
+userRouter.get(
     "/search",
     validateQuery(z.object({
         q: z.string().min(1, "Search query required"),
@@ -213,7 +212,7 @@ router.get(
  * @desc    Get user by ID
  * @access  Private
  */
-router.get(
+userRouter.get(
     "/:id",
     validateParams(z.object({
         id: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid user ID")
@@ -221,4 +220,4 @@ router.get(
     getUserById
 );
 
-export default router;
+export { userRouter };

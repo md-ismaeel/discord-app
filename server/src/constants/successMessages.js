@@ -3,12 +3,19 @@ export const SUCCESS_MESSAGES = {
     LOGIN_SUCCESS: "Logged in successfully",
     LOGOUT_SUCCESS: "Logged out successfully",
     REGISTER_SUCCESS: "Account created successfully",
+    AUTH_STATUS_SUCCESS:"User details fetched successfully",
 
     // User
     USER_CREATED: "User created successfully",
     USER_UPDATED: "User updated successfully",
     USER_DELETED: "User deleted successfully",
     PROFILE_UPDATED: "Profile updated successfully",
+    GET_PROFILE_SUCCESS: "Profile fetched successfully",
+
+    // Server Member
+    SERVER_MEMBER_JOINED: "Joined server successfully",
+    SERVER_MEMBER_LEFT: "Left server successfully",
+
 
     // Friend
     FRIEND_REQUEST_SENT: "Friend request sent successfully",
