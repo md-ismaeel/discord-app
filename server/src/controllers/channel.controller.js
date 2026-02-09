@@ -25,8 +25,7 @@ const getCacheKey = {
 
 const invalidateChannelCache = async (serverId, channelId = null) => {
     const keys = [
-        getCacheKey.serverChannels(serverId),
-        `server:${serverId}`,
+        getCacheKey.serverChannels(serverId),`server:${serverId}`,
     ];
 
     if (channelId) {
