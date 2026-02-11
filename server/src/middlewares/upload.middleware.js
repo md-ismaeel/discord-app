@@ -4,79 +4,122 @@ import { createApiError } from "../utils/ApiError.js";
 import { HTTP_STATUS } from "../constants/httpStatus.js";
 
 // ============================================================================
-// MULTER CONFIGURATION
+// FILE FILTERS (What file types are allowed?)
 // ============================================================================
 
-// File filter - accept only images
+/**
+ * Accept only images (jpeg, jpg, png, gif, webp)
+ */
 const imageFilter = (req, file, cb) => {
-    const allowedTypes = /jpeg|jpg|png|gif|webp/;
-    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-    const mimetype = allowedTypes.test(file.mimetype);
+  const allowedTypes = /jpeg|jpg|png|gif|webp/;
+  const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+  const mimetype = allowedTypes.test(file.mimetype);
 
-    if (mimetype && extname) {
-        return cb(null, true);
-    } else {
-        cb(createApiError(
-            HTTP_STATUS.BAD_REQUEST,
-            "Only image files are allowed (jpeg, jpg, png, gif, webp)"
-        ));
-    }
+  if (mimetype && extname) {
+    cb(null, true);
+  } else {
+    cb(
+      createApiError(
+        HTTP_STATUS.BAD_REQUEST,
+        "Only image files are allowed (jpeg, jpg, png, gif, webp)",
+      ),
+    );
+  }
 };
 
-// File filter - accept images and common document types
+/**
+ * Accept images and documents
+ */
 const fileFilter = (req, file, cb) => {
-    const allowedTypes = /jpeg|jpg|png|gif|webp|pdf|doc|docx|txt|zip|rar/;
-    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+  const allowedTypes = /jpeg|jpg|png|gif|webp|pdf|doc|docx|txt|zip|rar/;
+  const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
 
-    if (extname) {
-        return cb(null, true);
-    } else {
-        cb(createApiError(
-            HTTP_STATUS.BAD_REQUEST,
-            "File type not allowed"
-        ));
-    }
+  if (extname) {
+    cb(null, true);
+  } else {
+    cb(createApiError(HTTP_STATUS.BAD_REQUEST, "File type not allowed"));
+  }
 };
 
 // ============================================================================
-// STORAGE OPTIONS
+// STORAGE CONFIGURATION
 // ============================================================================
 
-// Option 1: Memory Storage (for cloud uploads like S3, Cloudinary)
+/**
+ * Memory Storage - Files stored in RAM as Buffer
+ * Use this when uploading to Cloudinary (which we are doing)
+ */
 const memoryStorage = multer.memoryStorage();
 
-// Option 2: Disk Storage (for local development)
-const diskStorage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        cb(null, "uploads/"); // Make sure this directory exists
-    },
-    filename: (req, file, cb) => {
-        const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-        cb(null, file.fieldname + "-" + uniqueSuffix + path.extname(file.originalname));
-    },
-});
-
 // ============================================================================
-// MULTER INSTANCES
+// MULTER UPLOAD CONFIGURATIONS
+// Each export is a pre-configured multer middleware
+// Use like: router.post('/upload', uploadAvatar.single('avatar'), controller)
 // ============================================================================
 
-// For avatar uploads (images only, max 5MB)
-export const upload = multer({
-    storage: memoryStorage, // Change to diskStorage for local development
-    limits: {
-        fileSize: 5 * 1024 * 1024, // 5MB
-    },
-    fileFilter: imageFilter,
+/**
+ * Upload a single avatar image (max 5MB)
+ * Usage: uploadAvatar.single('avatar')
+ */
+export const uploadAvatar = multer({
+  storage: memoryStorage,
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB
+    files: 1,
+  },
+  fileFilter: imageFilter,
 });
 
-// For message attachments (multiple files, max 10MB each)
+/**
+ * Upload a single server icon (max 5MB)
+ * Usage: uploadServerIcon.single('icon')
+ */
+export const uploadServerIcon = multer({
+  storage: memoryStorage,
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB
+    files: 1,
+  },
+  fileFilter: imageFilter,
+});
+
+/**
+ * Upload a single server banner (max 10MB)
+ * Usage: uploadServerBanner.single('banner')
+ */
+export const uploadServerBanner = multer({
+  storage: memoryStorage,
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB
+    files: 1,
+  },
+  fileFilter: imageFilter,
+});
+
+/**
+ * Upload message attachments (max 10 files, 10MB each)
+ * Usage: uploadAttachments.array('attachments', 10)
+ */
 export const uploadAttachments = multer({
-    storage: memoryStorage,
-    limits: {
-        fileSize: 10 * 1024 * 1024, // 10MB per file
-        files: 10, // Max 10 files at once
-    },
-    fileFilter: fileFilter,
+  storage: memoryStorage,
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB per file
+    files: 10,
+  },
+  fileFilter: fileFilter,
+});
+
+/**
+ * Upload custom emoji (max 2MB)
+ * Usage: uploadEmoji.single('emoji')
+ */
+export const uploadEmoji = multer({
+  storage: memoryStorage,
+  limits: {
+    fileSize: 2 * 1024 * 1024, // 2MB
+    files: 1,
+  },
+  fileFilter: imageFilter,
 });
 
 // ============================================================================
@@ -84,96 +127,41 @@ export const uploadAttachments = multer({
 // ============================================================================
 
 /**
- * Handle Multer errors
+ * Handle multer-specific errors
+ * Add this AFTER your routes: app.use(handleMulterError)
  */
 export const handleMulterError = (err, req, res, next) => {
-    if (err instanceof multer.MulterError) {
-        if (err.code === "LIMIT_FILE_SIZE") {
-            return res.status(HTTP_STATUS.BAD_REQUEST).json({
-                success: false,
-                message: "File too large. Maximum size is 5MB for avatars and 10MB for attachments.",
-            });
-        }
-        if (err.code === "LIMIT_FILE_COUNT") {
-            return res.status(HTTP_STATUS.BAD_REQUEST).json({
-                success: false,
-                message: "Too many files. Maximum is 10 files per upload.",
-            });
-        }
-        if (err.code === "LIMIT_UNEXPECTED_FILE") {
-            return res.status(HTTP_STATUS.BAD_REQUEST).json({
-                success: false,
-                message: "Unexpected field in upload.",
-            });
-        }
+  if (err instanceof multer.MulterError) {
+    if (err.code === "LIMIT_FILE_SIZE") {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        success: false,
+        message: "File too large. Check size limits for your upload type.",
+        error: { code: err.code, field: err.field },
+      });
     }
-    next(err);
-};
 
-// ============================================================================
-// CLOUD UPLOAD HELPER (OPTIONAL - FOR AWS S3, CLOUDINARY, ETC.)
-// ============================================================================
+    if (err.code === "LIMIT_FILE_COUNT") {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        success: false,
+        message: "Too many files. Maximum allowed exceeded.",
+        error: { code: err.code },
+      });
+    }
 
-/**
- * Upload file to cloud storage (example for Cloudinary)
- * Uncomment and configure when ready to use cloud storage
- */
-/*
-import { v2 as cloudinary } from "cloudinary";
+    if (err.code === "LIMIT_UNEXPECTED_FILE") {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        success: false,
+        message: "Unexpected field in upload.",
+        error: { code: err.code, field: err.field },
+      });
+    }
 
-cloudinary.config({
-    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-    api_key: process.env.CLOUDINARY_API_KEY,
-    api_secret: process.env.CLOUDINARY_API_SECRET,
-});
-
-export const uploadToCloudinary = async (file, folder = "avatars") => {
-    return new Promise((resolve, reject) => {
-        const uploadStream = cloudinary.uploader.upload_stream(
-            {
-                folder: folder,
-                resource_type: "auto",
-            },
-            (error, result) => {
-                if (error) reject(error);
-                else resolve(result);
-            }
-        );
-
-        uploadStream.end(file.buffer);
+    return res.status(HTTP_STATUS.BAD_REQUEST).json({
+      success: false,
+      message: "Upload error",
+      error: { code: err.code, message: err.message },
     });
-};
-*/
+  }
 
-/**
- * Upload file to AWS S3 (example)
- * Uncomment and configure when ready to use S3
- */
-/*
-import AWS from "aws-sdk";
-
-const s3 = new AWS.S3({
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-    region: process.env.AWS_REGION,
-});
-
-export const uploadToS3 = async (file, folder = "avatars") => {
-    const params = {
-        Bucket: process.env.AWS_BUCKET_NAME,
-        Key: `${folder}/${Date.now()}-${file.originalname}`,
-        Body: file.buffer,
-        ContentType: file.mimetype,
-        ACL: "public-read",
-    };
-
-    const result = await s3.upload(params).promise();
-    return result.Location; // Returns the URL
-};
-*/
-
-export default {
-    upload,
-    uploadAttachments,
-    handleMulterError,
+  next(err);
 };

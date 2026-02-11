@@ -1,21 +1,25 @@
 import express from "express";
+import { z } from "zod";
 import { authenticated } from "../middlewares/auth.middleware.js";
 import {
   validateBody,
   validateParams,
-  validate,
 } from "../middlewares/validate.middleware.js";
 import * as serverController from "../controllers/server.controller.js";
 import * as channelController from "../controllers/channel.controller.js";
+import * as inviteController from "../controllers/invite.controller.js";
+import * as roleController from "../controllers/role.controller.js";
 import {
   createServerSchema,
   updateServerSchema,
   serverIdParamSchema,
+  serverMemberIdParamSchema,
 } from "../validations/server.validation.js";
 import {
   createChannelSchema,
   updateChannelSchema,
   channelIdParamSchema,
+  reorderChannelsSchema,
 } from "../validations/channel.validation.js";
 import {
   updateMemberRoleSchema,
@@ -25,220 +29,147 @@ import {
   createInviteSchema,
   joinServerSchema,
 } from "../validations/invite.validation.js";
+import { createRoleSchema } from "../validations/role.validation.js";
 
 const serverRouter = express.Router();
 
-// ============================================================================
 // ALL ROUTES REQUIRE AUTHENTICATION
-// ============================================================================
-serverRouter.use(authenticated); // Apply authentication to all routes below
+serverRouter.use(authenticated);
 
-// ============================================================================
-// SERVER ROUTES
-// ============================================================================
-
-/**
- * @route   POST /api/v1/servers
- * @desc    Create a new server
- * @access  Private
- */
+//    Create a new server\
 serverRouter.post(
   "/",
   validateBody(createServerSchema),
-  serverController.createServer
+  serverController.createServer,
 );
 
-/**
- * @route   GET /api/v1/servers
- * @desc    Get all servers for current user
- * @access  Private
- */
+//    Get all servers for current user\
 serverRouter.get("/", serverController.getUserServers);
 
-/**
- * @route   POST /api/v1/servers/join
- * @desc    Join server using invite code
- * @access  Private
- */
-// serverRouter.post(
-//   "/join",
-//   validateBody(joinServerSchema),
-//   serverController.joinServer
-// );
-
-/**
- * @route   GET /api/v1/servers/:serverId
- * @desc    Get server by ID
- * @access  Private
- */
+//    Get server by ID\
 serverRouter.get(
   "/:serverId",
   validateParams(serverIdParamSchema),
-  serverController.getServer
+  serverController.getServer,
 );
 
-/**
- * @route   PATCH /api/v1/servers/:serverId
- * @desc    Update server
- * @access  Private (Owner or Admin)
- */
+//    Update server\
 serverRouter.patch(
   "/:serverId",
   validateParams(serverIdParamSchema),
   validateBody(updateServerSchema),
-  serverController.updateServer
+  serverController.updateServer,
 );
 
-/**
- * @route   DELETE /api/v1/servers/:serverId
- * @desc    Delete server
- * @access  Private (Owner only)
- */
+//    Delete server\
 serverRouter.delete(
   "/:serverId",
   validateParams(serverIdParamSchema),
-  serverController.deleteServer
+  serverController.deleteServer,
 );
 
-/**
- * @route   POST /api/v1/servers/:serverId/leave
- * @desc    Leave server
- * @access  Private
- */
+//    Leave server\
 serverRouter.post(
   "/:serverId/leave",
   validateParams(serverIdParamSchema),
-  serverController.leaveServer
+  serverController.leaveServer,
 );
 
-// ============================================================================
-// SERVER MEMBER ROUTES
-// ============================================================================
-
-/**
- * @route   GET /api/v1/servers/:serverId/members
- * @desc    Get all members of a server
- * @access  Private (Members only)
- */
+//    Get all members of a server\
 serverRouter.get(
   "/:serverId/members",
   validateParams(serverIdParamSchema),
-  serverController.getServerMembers
+  serverController.getServerMembers,
 );
 
-/**
- * @route   PATCH /api/v1/servers/:serverId/members/:memberId/role
- * @desc    Update member role
- * @access  Private (Owner or Admin)
- */
+//    Update member role\
 serverRouter.patch(
   "/:serverId/members/:memberId/role",
-  validateParams(serverIdParamSchema),
+  validateParams(serverMemberIdParamSchema),
   validateBody(updateMemberRoleSchema),
-  serverController.updateMemberRole
+  serverController.updateMemberRole,
 );
 
-/**
- * @route   DELETE /api/v1/servers/:serverId/members/:memberId
- * @desc    Kick member from server
- * @access  Private (Owner, Admin, or Moderator)
- */
+//    Kick member from server\
 serverRouter.delete(
   "/:serverId/members/:memberId",
-  validateParams(serverIdParamSchema),
-  serverController.kickMember
+  validateParams(serverMemberIdParamSchema),
+  serverController.kickMember,
 );
 
-// ============================================================================
-// SERVER INVITE ROUTES
-// ============================================================================
-
-/**
- * @route   POST /api/v1/servers/:serverId/invites
- * @desc    Create server invite
- * @access  Private (Members with createInvite permission)
- */
-// serverRouter.post(
-//   "/:serverId/invites",
-//   validateParams(serverIdParamSchema),
-//   validateBody(createInviteSchema),
-//   serverController.createInvite
-// );
-
-// ============================================================================
-// CHANNEL ROUTES (nested under servers)
-// ============================================================================
-
-/**
- * @route   POST /api/v1/servers/:serverId/channels
- * @desc    Create a new channel
- * @access  Private (Owner, Admin, or Moderator)
- */
+//    Create a new channel\
 serverRouter.post(
   "/:serverId/channels",
   validateParams(serverIdParamSchema),
   validateBody(createChannelSchema),
-  channelController.createChannel
+  channelController.createChannel,
 );
 
-/**
- * @route   GET /api/v1/servers/:serverId/channels
- * @desc    Get all channels in a server
- * @access  Private (Members only)
- */
+//    Get all channels in a server\
 serverRouter.get(
   "/:serverId/channels",
   validateParams(serverIdParamSchema),
-  channelController.getServerChannels
+  channelController.getServerChannels,
 );
 
-/**
- * @route   PATCH /api/v1/servers/:serverId/channels/reorder
- * @desc    Reorder channels
- * @access  Private (Owner, Admin, or Moderator)
- */
+//    Reorder channels\
 serverRouter.patch(
   "/:serverId/channels/reorder",
   validateParams(serverIdParamSchema),
-  channelController.reorderChannels
+  validateBody(reorderChannelsSchema),
+  channelController.reorderChannels,
 );
 
-// ============================================================================
-// STANDALONE CHANNEL ROUTES
-// ============================================================================
-
-/**
- * @route   GET /api/v1/servers/channels/:channelId
- * @desc    Get channel by ID
- * @access  Private (Members only)
- */
+//    Get channel by ID\
 serverRouter.get(
   "/channels/:channelId",
   validateParams(channelIdParamSchema),
-  channelController.getChannel
+  channelController.getChannel,
 );
 
-/**
- * @route   PATCH /api/v1/servers/channels/:channelId
- * @desc    Update channel
- * @access  Private (Owner, Admin, or Moderator)
- */
+//    Update channel\
 serverRouter.patch(
   "/channels/:channelId",
   validateParams(channelIdParamSchema),
   validateBody(updateChannelSchema),
-  channelController.updateChannel
+  channelController.updateChannel,
 );
 
-/**
- * @route   DELETE /api/v1/servers/channels/:channelId
- * @desc    Delete channel
- * @access  Private (Owner or Admin)
- */
+//    Delete channel\
 serverRouter.delete(
   "/channels/:channelId",
   validateParams(channelIdParamSchema),
-  channelController.deleteChannel
+  channelController.deleteChannel,
+);
+
+//    Create server invite\
+serverRouter.post(
+  "/:serverId/invites",
+  validateParams(serverIdParamSchema),
+  validateBody(createInviteSchema),
+  inviteController.createInvite,
+);
+
+//    Get all invites for a server\
+serverRouter.get(
+  "/:serverId/invites",
+  validateParams(serverIdParamSchema),
+  inviteController.getServerInvites,
+);
+
+//    Create a new role\
+serverRouter.post(
+  "/:serverId/roles",
+  validateParams(serverIdParamSchema),
+  validateBody(createRoleSchema),
+  roleController.createRole,
+);
+
+//    Get all roles in a server\
+serverRouter.get(
+  "/:serverId/roles",
+  validateParams(serverIdParamSchema),
+  roleController.getServerRoles,
 );
 
 export { serverRouter };

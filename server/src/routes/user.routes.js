@@ -1,223 +1,129 @@
 import express from "express";
-import { validateBody, validateParams, validateQuery } from "../middlewares/validate.middleware.js";
 import {
-    updateProfileSchema,
-    changePasswordSchema,
-    updateUserStatusSchema,
+  validateBody,
+  validateParams,
+  validateQuery,
+} from "../middlewares/validate.middleware.js";
+import {
+  updateProfileSchema,
+  changePasswordSchema,
+  updateUserStatusSchema,
 } from "../validations/auth.validation.js";
-import {
-    getMe,
-    updateProfile,
-    changePassword,
-    getUserById,
-    searchUsers,
-    updateStatus,
-    deleteAccount,
-    uploadAvatar,
-    getUserServers,
-    getFriends,
-    addFriend,
-    removeFriend,
-    blockUser,
-    unblockUser,
-    getBlockedUsers,
-} from "../controllers/user.controller.js";
-import { authenticated, checkOwnership } from "../middlewares/auth.middleware.js";
-import { upload } from "../middlewares/upload.middleware.js";
+import * as userController from "../controllers/user.controller.js";
+import { authenticated } from "../middlewares/auth.middleware.js";
+import { uploadAvatar } from "../middlewares/upload.middleware.js";
 import { z } from "zod";
+import { userIdParamSchema } from "../validations/common.js";
 
 const userRouter = express.Router();
 
-// ============================================================================
-// AUTHENTICATION REQUIRED FOR ALL ROUTES
-// ============================================================================
+// ALL ROUTES REQUIRE AUTHENTICATION
 userRouter.use(authenticated);
 
-// ============================================================================
-// CURRENT USER PROFILE
-// ============================================================================
+// Get current user profile
+userRouter.get("/me", userController.getMe);
+
+// Update current user profile (name, username, bio)
+userRouter.patch("/me", validateBody(updateProfileSchema), userController.updateProfile);
+
+// Delete current user account
+userRouter.delete("/me", userController.deleteAccount);
 
 /**
- * @route   GET /api/v1/users/me
- * @desc    Get current user profile
- * @access  Private
- */
-userRouter.get("/me", getMe);
-
-/**
- * @route   PATCH /api/v1/users/me
- * @desc    Update current user profile
- * @access  Private
- */
-userRouter.patch(
-    "/me",
-    validateBody(updateProfileSchema),
-    updateProfile
-);
-
-/**
- * @route   DELETE /api/v1/users/me
- * @desc    Delete current user account
- * @access  Private
- */
-userRouter.delete("/me", deleteAccount);
-
-/**
- * @route   POST /api/v1/users/me/avatar
- * @desc    Upload user avatar
- * @access  Private
+ * Upload user avatar
+ * 
+ * HOW THIS WORKS:
+ * 1. uploadAvatar.single('avatar') is multer middleware
+ * 2. It expects a file field named 'avatar' in the form data
+ * 3. Multer receives the file, stores it in memory as a Buffer
+ * 4. The Buffer is accessible via req.file.buffer in the controller
+ * 5. Controller passes the buffer to Cloudinary service
+ * 6. Cloudinary uploads and returns a URL
+ * 
+ * CLIENT SIDE (example):
+ * const formData = new FormData();
+ * formData.append('avatar', fileInputElement.files[0]);
+ * await fetch('/api/users/me/avatar', { method: 'POST', body: formData });
  */
 userRouter.post(
-    "/me/avatar",
-    upload.single("avatar"), // multer middleware for file upload
-    uploadAvatar
+  "/me/avatar",
+  uploadAvatar.single("avatar"), // Multer middleware: receives file, stores in memory
+  userController.uploadAvatar,   // Controller: gets req.file.buffer, uploads to Cloudinary
 );
 
-/**
- * @route   PATCH /api/v1/users/me/password
- * @desc    Change user password
- * @access  Private
- */
+// Change user password
 userRouter.patch(
-    "/me/password",
-    validateBody(changePasswordSchema),
-    changePassword
+  "/me/password",
+  validateBody(changePasswordSchema),
+  userController.changePassword,
 );
 
-// ============================================================================
-// USER STATUS
-// ============================================================================
-
-/**
- * @route   PATCH /api/v1/users/me/status
- * @desc    Update user status (online/offline/away/dnd)
- * @access  Private
- */
+// Update user status (online/offline/away/dnd)
 userRouter.patch(
-    "/me/status",
-    validateBody(updateUserStatusSchema),
-    updateStatus
+  "/me/status",
+  validateBody(updateUserStatusSchema),
+  userController.updateStatus,
 );
 
-// ============================================================================
-// USER SERVERS
-// ============================================================================
+// SERVER ROUTES
 
-/**
- * @route   GET /api/v1/users/me/servers
- * @desc    Get all servers current user is a member of
- * @access  Private
- */
-userRouter.get("/me/servers", getUserServers);
+// Get all servers current user is a member of
+userRouter.get("/me/servers", userController.getUserServers);
 
-// ============================================================================
-// FRIENDS & SOCIAL
-// ============================================================================
+// FRIENDS ROUTES
 
-/**
- * @route   GET /api/v1/users/me/friends
- * @desc    Get user's friends list
- * @access  Private
- */
-userRouter.get("/me/friends", getFriends);
+// Get user's friends list
+userRouter.get("/me/friends", userController.getFriends);
 
-/**
- * @route   POST /api/v1/users/me/friends/:userId
- * @desc    Add a friend
- * @access  Private
- */
+// Add a friend
 userRouter.post(
-    "/me/friends/:userId",
-    validateParams(z.object({
-        userId: z.string().regex(/^[0-9a-fA-F]{24}$/)
-    })),
-    addFriend
+  "/me/friends/:userId",
+  validateParams(userIdParamSchema),
+  userController.addFriend,
 );
 
-/**
- * @route   DELETE /api/v1/users/me/friends/:userId
- * @desc    Remove a friend
- * @access  Private
- */
+// Remove a friend
 userRouter.delete(
-    "/me/friends/:userId",
-    validateParams(z.object({
-        userId: z.string().regex(/^[0-9a-fA-F]{24}$/)
-    })),
-    removeFriend
+  "/me/friends/:userId",
+  validateParams(userIdParamSchema),
+  userController.removeFriend,
 );
 
-// ============================================================================
-// BLOCKING
-// ============================================================================
+// BLOCKING ROUTES
 
-/**
- * @route   GET /api/v1/users/me/blocked
- * @desc    Get list of blocked users
- * @access  Private
- */
-userRouter.get("/me/blocked", getBlockedUsers);
+// Get list of blocked users
+userRouter.get("/me/blocked", userController.getBlockedUsers);
 
-/**
- * @route   POST /api/v1/users/me/blocked/:userId
- * @desc    Block a user
- * @access  Private
- */
+// Block a user
 userRouter.post(
-    "/me/blocked/:userId",
-    validateParams(z.object({
-        userId: z.string().regex(/^[0-9a-fA-F]{24}$/)
-    })),
-    blockUser
+  "/me/blocked/:userId",
+  validateParams(userIdParamSchema),
+  userController.blockUser,
 );
 
-/**
- * @route   DELETE /api/v1/users/me/blocked/:userId
- * @desc    Unblock a user
- * @access  Private
- */
+// Unblock a user
 userRouter.delete(
-    "/me/blocked/:userId",
-    validateParams(z.object({
-        userId: z.string().regex(/^[0-9a-fA-F]{24}$/)
-    })),
-    unblockUser
+  "/me/blocked/:userId",
+  validateParams(userIdParamSchema),
+  userController.unblockUser,
 );
 
-// ============================================================================
-// SEARCH & DISCOVER
-// ============================================================================
+// USER SEARCH & DISCOVERY ROUTES
 
-/**
- * @route   GET /api/v1/users/search
- * @desc    Search for users by username or email
- * @access  Private
- */
+// Search for users by username or email
 userRouter.get(
-    "/search",
-    validateQuery(z.object({
-        q: z.string().min(1, "Search query required"),
-        page: z.string().regex(/^\d+$/).transform(Number).optional().default("1"),
-        limit: z.string().regex(/^\d+$/).transform(Number).optional().default("20"),
-    })),
-    searchUsers
+  "/search",
+  validateQuery(
+    z.object({
+      q: z.string().min(1, "Search query required"),
+      page: z.string().regex(/^\d+$/).transform(Number).optional().default("1"),
+      limit: z.string().regex(/^\d+$/).transform(Number).optional().default("20"),
+    }),
+  ),
+  userController.searchUsers,
 );
 
-// ============================================================================
-// GET OTHER USERS
-// ============================================================================
-
-/**
- * @route   GET /api/v1/users/:id
- * @desc    Get user by ID
- * @access  Private
- */
-userRouter.get(
-    "/:id",
-    validateParams(z.object({
-        id: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid user ID")
-    })),
-    getUserById
-);
+// Get user by ID
+userRouter.get("/:id", validateParams(userIdParamSchema), userController.getUserById);
 
 export { userRouter };

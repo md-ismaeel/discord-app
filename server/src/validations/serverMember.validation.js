@@ -1,10 +1,9 @@
 import { z } from "zod";
 
 export const updateMemberRoleSchema = z.object({
-    role: z
-        .enum(["owner", "admin", "moderator", "member"], {
-            errorMap: () => ({ message: "Role must be one of: owner, admin, moderator, member" })
-        }),
+    role: z.enum(["admin", "moderator", "member"], {
+        errorMap: () => ({ message: "Role must be admin, moderator, or member" }),
+    }),
 });
 
 export const memberIdParamSchema = z.object({
@@ -33,3 +32,4 @@ export const banMemberSchema = z.object({
         .optional()
         .default(0),
 });
+

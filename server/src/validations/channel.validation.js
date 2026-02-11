@@ -1,70 +1,31 @@
 import { z } from "zod";
 
 export const createChannelSchema = z.object({
-    name: z
-        .string()
-        .min(1, "Channel name is required")
-        .max(100, "Channel name cannot exceed 100 characters")
-        .trim()
-        .regex(/^[a-z0-9-]+$/, "Channel name can only contain lowercase letters, numbers, and hyphens"),
-    type: z
-        .enum(["text", "voice", "announcement"], {
-            errorMap: () => ({ message: "Type must be one of: text, voice, announcement" })
-        }),
-    topic: z
-        .string()
-        .max(1024, "Topic cannot exceed 1024 characters")
-        .optional()
-        .default(""),
-    category: z
-        .string()
-        .max(100, "Category cannot exceed 100 characters")
-        .optional()
-        .nullable(),
-    position: z
-        .number()
-        .int()
-        .min(0, "Position must be a positive number")
-        .optional()
-        .default(0),
-    isPrivate: z
-        .boolean()
-        .optional()
-        .default(false),
-    allowedRoles: z
-        .array(z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid role ID"))
-        .optional()
-        .default([]),
+    name: z.string().min(1, "Channel name is required").max(50, "Channel name cannot exceed 50 characters"),
+    type: z.enum(["text", "voice"], {
+        errorMap: () => ({ message: "Channel type must be text or voice" }),
+    }),
+    topic: z.string().max(200, "Topic cannot exceed 200 characters").optional(),
+    category: z.string().optional(),
+    position: z.number().int().min(0).optional(),
+    isPrivate: z.boolean().optional(),
+    allowedRoles: z.array(z.string().regex(/^[0-9a-fA-F]{24}$/)).optional(),
 });
 
 export const updateChannelSchema = z.object({
-    name: z
-        .string()
-        .min(1, "Channel name is required")
-        .max(100, "Channel name cannot exceed 100 characters")
-        .trim()
-        .regex(/^[a-z0-9-]+$/, "Channel name can only contain lowercase letters, numbers, and hyphens")
-        .optional(),
-    topic: z
-        .string()
-        .max(1024, "Topic cannot exceed 1024 characters")
-        .optional(),
-    category: z
-        .string()
-        .max(100, "Category cannot exceed 100 characters")
-        .optional()
-        .nullable(),
-    position: z
-        .number()
-        .int()
-        .min(0, "Position must be a positive number")
-        .optional(),
-    isPrivate: z
-        .boolean()
-        .optional(),
-    allowedRoles: z
-        .array(z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid role ID"))
-        .optional(),
+    name: z.string().min(1, "Channel name is required").max(50, "Channel name cannot exceed 50 characters").optional(),
+    topic: z.string().max(200, "Topic cannot exceed 200 characters").optional(),
+    category: z.string().optional(),
+    position: z.number().int().min(0).optional(),
+    isPrivate: z.boolean().optional(),
+    allowedRoles: z.array(z.string().regex(/^[0-9a-fA-F]{24}$/)).optional(),
+});
+
+export const reorderChannelsSchema = z.object({
+    channelOrder: z.array(z.object({
+        channelId: z.string().regex(/^[0-9a-fA-F]{24}$/),
+        position: z.number().int().min(0),
+    })).min(1, "channelOrder must contain at least one channel"),
 });
 
 export const channelIdParamSchema = z.object({

@@ -34,6 +34,7 @@ export const SUCCESS_MESSAGES = {
     CHANNEL_CREATED: "Channel created successfully",
     CHANNEL_UPDATED: "Channel updated successfully",
     CHANNEL_DELETED: "Channel deleted successfully",
+    CHANNELS_FETCHED: "Channel fetched successfully",
 
     // Message
     MESSAGE_SENT: "Message sent successfully",

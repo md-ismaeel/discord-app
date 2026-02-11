@@ -1,531 +1,572 @@
 import { asyncHandler } from "../utils/asyncHandler.js";
-import { sendSuccess, sendCreated } from "../utils/response.js";
 import { createApiError } from "../utils/ApiError.js";
+import { sendSuccess } from "../utils/response.js";
 import { ERROR_MESSAGES } from "../constants/errorMessages.js";
 import { SUCCESS_MESSAGES } from "../constants/successMessages.js";
 import { UserModel } from "../models/user.model.js";
 import { ServerMemberModel } from "../models/serverMember.model.js";
 import { ServerModel } from "../models/server.model.js";
-import { HTTP_STATUS } from "../constants/httpStatus.js";
 import { pubClient } from "../config/redis.config.js";
-import { getIO } from "../socket/socketHandler.js";
+import { hashPassword, comparePassword } from "../utils/bcrypt.js";
+import { emitToUser } from "../socket/socketHandler.js";
 import { validateObjectId } from "../utils/validateObjId.js";
+import { HTTP_STATUS } from "../constants/httpStatus.js";
+import { uploadAvatarToCloud } from "../services/cloudinary.service.js";
 
+// REDIS CACHE HELPERS
+const CACHE_TTL = {
+  USER: 1800, // 30 minutes
+  USERS_LIST: 600, // 10 minutes
+  FRIENDS: 900, // 15 minutes
+  BLOCKED: 900, // 15 minutes
+};
 
-/**
- * @desc    Get current user profile
- */
+const getCacheKey = {
+  user: (userId) => `user:${userId}`,
+  userServers: (userId) => `user:${userId}:servers`,
+  userFriends: (userId) => `user:${userId}:friends`,
+  userBlocked: (userId) => `user:${userId}:blocked`,
+  searchResults: (query, page, limit) => `search:users:${query}:${page}:${limit}`,
+};
+
+const invalidateUserCache = async (userId) => {
+  const keys = [
+    getCacheKey.user(userId),
+    getCacheKey.userServers(userId),
+    getCacheKey.userFriends(userId),
+    getCacheKey.userBlocked(userId),
+  ];
+
+  await pubClient.del(...keys);
+
+  // Also invalidate search cache
+  const searchKeys = await pubClient.keys("search:users:*");
+  if (searchKeys.length > 0) {
+    await pubClient.del(...searchKeys);
+  }
+};
+
+// PROFILE CONTROLLERS
+// Get current user profile
 export const getMe = asyncHandler(async (req, res) => {
+  const userId = validateObjectId(req.user._id);
+  const cacheKey = getCacheKey.user(userId);
 
-    const userId = validateObjectId(req.user._id);
+  // Try cache first
+  const cached = await pubClient.get(cacheKey);
+  if (cached) {
+    return sendSuccess(res, JSON.parse(cached));
+  }
 
-    const user = await UserModel.findById(userId)
-        .select("-password")
-        .populate("friends", "username name avatar status customStatus")
-        .lean();
+  const user = await UserModel.findById(userId)
+    .select("-password")
+    .populate("friends", "username avatar status customStatus lastSeen")
+    .lean();
 
-    if (!user) {
-        throw createApiError(HTTP_STATUS.NOT_FOUND, ERROR_MESSAGES.USER_NOT_FOUND);
-    }
+  if (!user) {
+    throw createApiError(HTTP_STATUS.NOT_FOUND, ERROR_MESSAGES.USER_NOT_FOUND);
+  }
 
-    sendSuccess(res, user, SUCCESS_MESSAGES.GET_PROFILE_SUCCESS, HTTP_STATUS.OK);
+  // Cache the result
+  await pubClient.setex(cacheKey, CACHE_TTL.USER, JSON.stringify(user));
+
+  sendSuccess(res, user, SUCCESS_MESSAGES.GET_PROFILE_SUCCESS);
 });
 
-/**
- * @desc    Update current user profile
- */
+// Update current user profile
 export const updateProfile = asyncHandler(async (req, res) => {
-    const { name, username, bio, avatar } = req.body;
+  const userId = validateObjectId(req.user._id);
+  const { name, username, bio, avatar } = req.body;
 
-    const user = await UserModel.findById(req.user._id);
+  const user = await UserModel.findById(userId);
 
-    if (!user) {
-        throw createApiError(HTTP_STATUS.NOT_FOUND, ERROR_MESSAGES.USER_NOT_FOUND);
+  if (!user) {
+    throw createApiError(HTTP_STATUS.NOT_FOUND, ERROR_MESSAGES.USER_NOT_FOUND);
+  }
+
+  // Check if username is already taken (if being changed)
+  if (username && username !== user.username) {
+    const existingUser = await UserModel.findOne({ username });
+    if (existingUser) {
+      throw createApiError(HTTP_STATUS.CONFLICT, ERROR_MESSAGES.USERNAME_TAKEN);
     }
+    user.username = username;
+  }
 
-    // Check if username is taken (if trying to change it)
-    if (username && username !== user.username) {
-        const existingUser = await UserModel.findOne({ username });
-        if (existingUser) {
-            throw createApiError(HTTP_STATUS.CONFLICT, ERROR_MESSAGES.USERNAME_TAKEN);
-        }
-        user.username = username;
-    }
+  // Update fields
+  if (name !== undefined) user.name = name;
+  if (bio !== undefined) user.bio = bio;
+  if (avatar !== undefined) user.avatar = avatar;
 
-    // Update fields
-    if (name !== undefined) user.name = name;
-    if (bio !== undefined) user.bio = bio;
-    if (avatar !== undefined) user.avatar = avatar;
+  await user.save();
 
-    await user.save();
+  // Invalidate cache
+  await invalidateUserCache(userId);
 
-    // Get updated user without password
-    const updatedUser = await UserModel.findById(user._id).select("-password");
+  // Emit socket event to user
+  emitToUser(userId, "user:profileUpdated", {
+    userId,
+    updates: { name, username, bio, avatar },
+    timestamp: new Date(),
+  });
 
-    // Invalidate cache if needed
-    await pubClient.del(`user:${user._id}`);
+  const updatedUser = await UserModel.findById(userId).select("-password");
 
-    // Emit socket event to user's servers about profile update
-    const memberships = await ServerMemberModel.find({ user: user._id }).select("server");
-    const io = getIO();
-
-    memberships.forEach(membership => {
-        io.to(`server:${membership.server}`).emit("user:profileUpdated", {
-            userId: user._id,
-            username: updatedUser.username,
-            name: updatedUser.name,
-            avatar: updatedUser.avatar,
-            timestamp: new Date(),
-        });
-    });
-
-    sendSuccess(res, updatedUser, SUCCESS_MESSAGES.PROFILE_UPDATED);
+  sendSuccess(res, updatedUser, "Profile updated successfully");
 });
 
 /**
- * @desc    Change user password
- */
-export const changePassword = asyncHandler(async (req, res) => {
-    const { currentPassword, newPassword } = req.body;
-
-    // Get user with password field
-    const user = await UserModel.findById(req.user._id).select("+password");
-
-    if (!user) {
-        throw createApiError(HTTP_STATUS.NOT_FOUND, ERROR_MESSAGES.USER_NOT_FOUND);
-    }
-
-    // Check if user registered with email (not OAuth)
-    if (user.provider !== "email") {
-        throw createApiError(HTTP_STATUS.BAD_REQUEST, `Cannot change password for ${user.provider} accounts`);
-    }
-
-    // Verify current password
-    const isPasswordValid = await user.comparePassword(currentPassword);
-
-    if (!isPasswordValid) {
-        throw createApiError(HTTP_STATUS.UNAUTHORIZED, "Entered password is incorrect");
-    }
-
-    // Update password
-    user.password = newPassword;
-    await user.save();
-
-    sendSuccess(res, null, "Password changed successfully");
-});
-
-/**
- * @desc    Delete user account
- */
-export const deleteAccount = asyncHandler(async (req, res) => {
-    const userId = validateObjectId(req.user._id);
-
-    // Find all servers owned by user
-    const ownedServers = await ServerModel.find({ owner: userId });
-
-    if (ownedServers.length > 0) {
-        throw createApiError(HTTP_STATUS.BAD_REQUEST, "You must delete or transfer ownership of all your servers before deleting your account");
-    }
-
-    // Remove user from all server memberships
-    await ServerMemberModel.deleteMany({ user: userId });
-
-    await UserModel.findByIdAndDelete(userId);
-
-    // Clear any cached data
-    await pubClient.del(`user:${userId}`);
-
-    sendSuccess(res, null, "Account deleted successfully");
-});
-
-/**
- * @desc    Upload user avatar
+ * Upload user avatar
+ * 
+ * HOW THIS WORKS:
+ * 1. Multer middleware (uploadAvatar.single('avatar')) runs first in the route
+ * 2. Multer stores the file in memory as req.file.buffer
+ * 3. This controller receives req.file with the buffer
+ * 4. We pass the buffer to Cloudinary service
+ * 5. Cloudinary uploads and returns a URL
+ * 6. We save the URL to the database
  */
 export const uploadAvatar = asyncHandler(async (req, res) => {
-    if (!req.file) {
-        throw createApiError(HTTP_STATUS.BAD_REQUEST, "No file uploaded");
-    }
+  const userId = validateObjectId(req.user._id);
 
-    // Assuming you have file upload middleware that saves to cloud storage
-    // and adds the URL to req.file.location or req.file.path
-    const avatarUrl = req.file.location || req.file.path;
+  // req.file comes from multer middleware
+  if (!req.file) {
+    throw createApiError(HTTP_STATUS.BAD_REQUEST, "No file uploaded");
+  }
 
-    const userId = validateObjectId(req.user._id)
+  // Upload to Cloudinary (pass the buffer from multer)
+  const uploadResult = await uploadAvatarToCloud(req.file.buffer, userId);
 
-    const user = await UserModel.findByIdAndUpdate(
-        userId,
-        { avatar: avatarUrl },
-        { new: true, runValidators: true }
-    ).select("-password");
+  // Update user's avatar URL in database
+  const user = await UserModel.findByIdAndUpdate(
+    userId,
+    { avatar: uploadResult.url },
+    { new: true },
+  ).select("-password");
 
-    // Invalidate cache
-    await pubClient.del(`user:${user._id}`);
+  // Invalidate cache
+  await invalidateUserCache(userId);
 
-    // Emit socket event
-    const memberships = await ServerMemberModel.find({ user: user._id }).select("server");
-    const io = getIO();
+  // Emit socket event
+  emitToUser(userId, "user:avatarUpdated", {
+    userId,
+    avatar: uploadResult.url,
+    timestamp: new Date(),
+  });
 
-    memberships.forEach(membership => {
-        io.to(`server:${membership.server}`).emit("user:avatarUpdated", {
-            userId: user._id,
-            avatar: avatarUrl,
-            timestamp: new Date(),
-        });
-    });
-
-    sendSuccess(res, { avatar: avatarUrl }, "Avatar uploaded successfully");
+  sendSuccess(res, { avatar: uploadResult.url }, "Avatar uploaded successfully");
 });
 
-/**
- * @desc    Update user status
- */
+// Change user password
+export const changePassword = asyncHandler(async (req, res) => {
+  const userId = validateObjectId(req.user._id);
+  const { currentPassword, newPassword } = req.body;
+
+  const user = await UserModel.findById(userId).select("+password");
+
+  if (!user) {
+    throw createApiError(HTTP_STATUS.NOT_FOUND, ERROR_MESSAGES.USER_NOT_FOUND);
+  }
+
+  // Verify user registered with email (not OAuth)
+  if (user.provider !== "email") {
+    throw createApiError(
+      HTTP_STATUS.BAD_REQUEST,
+      "Cannot change password for OAuth accounts",
+    );
+  }
+
+  // Verify current password
+  const isPasswordValid = await comparePassword(currentPassword, user.password);
+
+  if (!isPasswordValid) {
+    throw createApiError(HTTP_STATUS.UNAUTHORIZED, "Current password is incorrect");
+  }
+
+  // Hash and save new password
+  user.password = await hashPassword(newPassword);
+  await user.save();
+
+  sendSuccess(res, null, "Password changed successfully");
+});
+
+// Delete current user account
+export const deleteAccount = asyncHandler(async (req, res) => {
+  const userId = validateObjectId(req.user._id);
+
+  // Delete user's server memberships
+  await ServerMemberModel.deleteMany({ user: userId });
+
+  // Transfer ownership or delete servers owned by user
+  const ownedServers = await ServerModel.find({ owner: userId });
+  for (const server of ownedServers) {
+    const nextAdmin = await ServerMemberModel.findOne({
+      server: server._id,
+      role: { $in: ["admin", "moderator"] },
+      user: { $ne: userId },
+    });
+
+    if (nextAdmin) {
+      server.owner = nextAdmin.user;
+      await server.save();
+    } else {
+      await server.deleteOne();
+    }
+  }
+
+  // Delete user
+  await UserModel.findByIdAndDelete(userId);
+
+  // Invalidate all user caches
+  await invalidateUserCache(userId);
+
+  sendSuccess(res, null, "Account deleted successfully");
+});
+
+// Update user status
 export const updateStatus = asyncHandler(async (req, res) => {
-    const { status, customStatus } = req.body;
-    const userId = validateObjectId(req.user._id)
+  const userId = validateObjectId(req.user._id);
+  const { status, customStatus } = req.body;
 
-    const user = await UserModel.findByIdAndUpdate(
+  const user = await UserModel.findByIdAndUpdate(
+    userId,
+    {
+      status,
+      customStatus: customStatus || "",
+      lastSeen: new Date(),
+    },
+    { new: true },
+  ).select("-password");
+
+  // Invalidate cache
+  await invalidateUserCache(userId);
+
+  // Emit to user's friends
+  if (user.friends && user.friends.length > 0) {
+    user.friends.forEach((friendId) => {
+      emitToUser(friendId.toString(), "friend:statusUpdated", {
         userId,
-        {
-            status,
-            customStatus: customStatus || "",
-            lastSeen: new Date(),
-        },
-        { new: true, runValidators: true }
-    ).select("-password");
-
-    // Invalidate cache
-    await pubClient.del(`user:${user._id}`);
-
-    // Emit socket event to all user's servers
-    const memberships = await ServerMemberModel.find({ user: user._id }).select("server");
-    const io = getIO();
-
-    memberships.forEach(membership => {
-        io.to(`server:${membership.server}`).emit("user:statusUpdated", {
-            userId: user._id,
-            status,
-            customStatus,
-            timestamp: new Date(),
-        });
+        status,
+        customStatus,
+        timestamp: new Date(),
+      });
     });
+  }
 
-    sendSuccess(res, user, "Status updated successfully");
+  sendSuccess(res, { status, customStatus }, "Status updated successfully");
 });
-
-
-/**
- * @desc    Get user by ID
- */
-export const getUserById = asyncHandler(async (req, res) => {
-    const { id } = req.params;
-    const userId = validateObjectId(id)
-
-    // Try cache first
-    const cacheKey = `user:${userId}`;
-    const cached = await pubClient.get(cacheKey);
-
-    if (cached) {
-        return sendSuccess(res, JSON.parse(cached));
-    }
-
-    const user = await UserModel.findById(userId)
-        .select("-password")
-        .lean();
-
-    if (!user) {
-        throw createApiError(HTTP_STATUS.NOT_FOUND, ERROR_MESSAGES.USER_NOT_FOUND);
-    }
-
-    // Cache for 30 minutes
-    await pubClient.setex(cacheKey, 1800, JSON.stringify(user));
-
-    sendSuccess(res, user);
-});
-
-/**
- * @desc    Search for users
- */
-export const searchUsers = asyncHandler(async (req, res) => {
-    const { q, page = 1, limit = 20 } = req.query;
-
-    if (!q || q.trim().length === 0) {
-        throw createApiError(HTTP_STATUS.BAD_REQUEST, "Search query is required");
-    }
-
-    const skip = (page - 1) * limit;
-
-    // Search by username or name (case-insensitive)
-    const users = await UserModel.find({
-        $or: [
-            { username: { $regex: q, $options: "i" } },
-            { name: { $regex: q, $options: "i" } },
-        ],
-    })
-        .select("username name avatar status customStatus")
-        .limit(parseInt(limit))
-        .skip(skip)
-        .lean();
-
-    const total = await UserModel.countDocuments({
-        $or: [
-            { username: { $regex: q, $options: "i" } },
-            { name: { $regex: q, $options: "i" } },
-        ],
-    });
-
-    sendSuccess(res, {
-        users,
-        pagination: {
-            page: parseInt(page),
-            limit: parseInt(limit),
-            total,
-            pages: Math.ceil(total / limit),
-        },
-    });
-});
-
-
-/**
- * @desc    Get all servers user is a member of
- * @route   GET /api/v1/users/me/servers
- * @access  Private
- */
+// SERVER MANAGEMENT
+// Get all servers current user is a member of
 export const getUserServers = asyncHandler(async (req, res) => {
-    const userId = validateObjectId(req.user._id)
-    
-    const cacheKey = `user:${req.user._id}:servers`;
+  const userId = validateObjectId(req.user._id);
+  const cacheKey = getCacheKey.userServers(userId);
 
-    // Try cache first
-    const cached = await pubClient.get(cacheKey);
-    if (cached) {
-        return sendSuccess(res, JSON.parse(cached));
-    }
+  // Try cache first
+  const cached = await pubClient.get(cacheKey);
+  if (cached) {
+    return sendSuccess(res, JSON.parse(cached));
+  }
 
-    // Find all server memberships
-    const memberships = await ServerMemberModel.find({
-        user: req.user._id
-    }).select("server");
+  const memberships = await ServerMemberModel.find({ user: userId })
+    .select("server role joinedAt")
+    .lean();
 
-    const serverIds = memberships.map(m => m.server);
+  const serverIds = memberships.map((m) => m.server);
 
-    // Get servers
-    const servers = await ServerModel.find({ _id: { $in: serverIds } })
-        .populate("owner", "username name avatar")
-        .select("name icon banner owner isPublic createdAt")
-        .sort({ createdAt: -1 })
-        .lean();
+  const servers = await ServerModel.find({ _id: { $in: serverIds } })
+    .populate("owner", "username avatar")
+    .populate("channels")
+    .sort({ createdAt: -1 })
+    .lean();
 
-    // Cache for 30 minutes
-    await pubClient.setex(cacheKey, 1800, JSON.stringify(servers));
+  // Add user's role to each server
+  const serversWithRole = servers.map((server) => {
+    const membership = memberships.find(
+      (m) => m.server.toString() === server._id.toString(),
+    );
+    return {
+      ...server,
+      userRole: membership?.role,
+      joinedAt: membership?.joinedAt,
+    };
+  });
 
-    sendSuccess(res, servers);
+  // Cache the result
+  await pubClient.setex(cacheKey, CACHE_TTL.USER, JSON.stringify(serversWithRole));
+
+  sendSuccess(res, serversWithRole, "Servers fetched successfully");
 });
-
-// ============================================================================
-// FRIENDS SYSTEM
-// ============================================================================
-
-/**
- * @desc    Get user's friends list
- * @route   GET /api/v1/users/me/friends
- * @access  Private
- */
+// FRIENDS MANAGEMENT
+// Get user's friends list
 export const getFriends = asyncHandler(async (req, res) => {
-    const user = await UserModel.findById(req.user._id)
-        .populate("friends", "username name avatar status customStatus lastSeen")
-        .select("friends")
-        .lean();
+  const userId = validateObjectId(req.user._id);
+  const cacheKey = getCacheKey.userFriends(userId);
 
-    if (!user) {
-        throw createApiError(
-            HTTP_STATUS.NOT_FOUND,
-            ERROR_MESSAGES.USER_NOT_FOUND
-        );
-    }
+  // Try cache first
+  const cached = await pubClient.get(cacheKey);
+  if (cached) {
+    return sendSuccess(res, JSON.parse(cached));
+  }
 
-    sendSuccess(res, user.friends);
+  const user = await UserModel.findById(userId)
+    .populate("friends", "username avatar status customStatus lastSeen bio")
+    .select("friends")
+    .lean();
+
+  if (!user) {
+    throw createApiError(HTTP_STATUS.NOT_FOUND, ERROR_MESSAGES.USER_NOT_FOUND);
+  }
+
+  // Cache the result
+  await pubClient.setex(cacheKey, CACHE_TTL.FRIENDS, JSON.stringify(user.friends));
+
+  sendSuccess(res, user.friends, "Friends fetched successfully");
 });
 
-/**
- * @desc    Add a friend
- * @route   POST /api/v1/users/me/friends/:userId
- * @access  Private
- */
+// Add a friend
 export const addFriend = asyncHandler(async (req, res) => {
-    const { userId } = req.params;
+  const currentUserId = validateObjectId(req.user._id);
+  const { userId } = req.params;
 
-    // Cannot add yourself as friend
-    if (userId === req.user._id.toString()) {
-        throw createApiError(
-            HTTP_STATUS.BAD_REQUEST,
-            "Cannot add yourself as a friend"
-        );
-    }
+  if (currentUserId === userId) {
+    throw createApiError(HTTP_STATUS.BAD_REQUEST, "Cannot add yourself as a friend");
+  }
 
-    // Check if target user exists
-    const targetUser = await UserModel.findById(userId);
-    if (!targetUser) {
-        throw createApiError(
-            HTTP_STATUS.NOT_FOUND,
-            ERROR_MESSAGES.USER_NOT_FOUND
-        );
-    }
+  const targetUser = await UserModel.findById(userId);
+  if (!targetUser) {
+    throw createApiError(HTTP_STATUS.NOT_FOUND, ERROR_MESSAGES.USER_NOT_FOUND);
+  }
 
-    // Check if already friends
-    const currentUser = await UserModel.findById(req.user._id);
-    if (currentUser.friends.includes(userId)) {
-        throw createApiError(
-            HTTP_STATUS.BAD_REQUEST,
-            "Already friends with this user"
-        );
-    }
+  const currentUser = await UserModel.findById(currentUserId);
 
-    // Add to both users' friend lists
-    await UserModel.findByIdAndUpdate(req.user._id, {
-        $addToSet: { friends: userId },
-    });
+  // Check if already friends
+  if (currentUser.friends.includes(userId)) {
+    throw createApiError(HTTP_STATUS.BAD_REQUEST, "Already friends with this user");
+  }
 
-    await UserModel.findByIdAndUpdate(userId, {
-        $addToSet: { friends: req.user._id },
-    });
+  // Add to both users' friends lists
+  currentUser.friends.push(userId);
+  targetUser.friends.push(currentUserId);
 
-    // Emit socket event
-    const io = getIO();
-    io.to(`user:${userId}`).emit("friend:added", {
-        user: {
-            _id: req.user._id,
-            username: req.user.username,
-            name: req.user.name,
-            avatar: req.user.avatar,
-        },
-        timestamp: new Date(),
-    });
+  await Promise.all([currentUser.save(), targetUser.save()]);
 
-    sendSuccess(res, null, "Friend added successfully");
+  // Invalidate caches
+  await Promise.all([invalidateUserCache(currentUserId), invalidateUserCache(userId)]);
+
+  // Emit socket events
+  emitToUser(userId, "friend:added", {
+    userId: currentUserId,
+    user: {
+      _id: currentUserId,
+      username: currentUser.username,
+      avatar: currentUser.avatar,
+      status: currentUser.status,
+    },
+    timestamp: new Date(),
+  });
+
+  sendSuccess(res, targetUser, "Friend added successfully");
 });
 
-/**
- * @desc    Remove a friend
- * @route   DELETE /api/v1/users/me/friends/:userId
- * @access  Private
- */
+// Remove a friend
 export const removeFriend = asyncHandler(async (req, res) => {
-    const { userId } = req.params;
+  const currentUserId = validateObjectId(req.user._id);
+  const { userId } = req.params;
 
-    // Remove from both users' friend lists
-    await UserModel.findByIdAndUpdate(req.user._id, {
-        $pull: { friends: userId },
-    });
+  const currentUser = await UserModel.findById(currentUserId);
+  const targetUser = await UserModel.findById(userId);
 
-    await UserModel.findByIdAndUpdate(userId, {
-        $pull: { friends: req.user._id },
-    });
+  if (!targetUser) {
+    throw createApiError(HTTP_STATUS.NOT_FOUND, ERROR_MESSAGES.USER_NOT_FOUND);
+  }
 
-    // Emit socket event
-    const io = getIO();
-    io.to(`user:${userId}`).emit("friend:removed", {
-        userId: req.user._id,
-        timestamp: new Date(),
-    });
+  // Remove from both users' friends lists
+  currentUser.friends = currentUser.friends.filter((id) => id.toString() !== userId);
+  targetUser.friends = targetUser.friends.filter(
+    (id) => id.toString() !== currentUserId,
+  );
 
-    sendSuccess(res, null, "Friend removed successfully");
+  await Promise.all([currentUser.save(), targetUser.save()]);
+
+  // Invalidate caches
+  await Promise.all([invalidateUserCache(currentUserId), invalidateUserCache(userId)]);
+
+  // Emit socket events
+  emitToUser(userId, "friend:removed", {
+    userId: currentUserId,
+    timestamp: new Date(),
+  });
+
+  sendSuccess(res, null, "Friend removed successfully");
 });
-
-// ============================================================================
-// BLOCKING SYSTEM
-// ============================================================================
-
-/**
- * @desc    Get list of blocked users
- * @route   GET /api/v1/users/me/blocked
- * @access  Private
- */
+// BLOCKING MANAGEMENT
+// Get list of blocked users
 export const getBlockedUsers = asyncHandler(async (req, res) => {
-    // You'll need to add a 'blocked' field to your User model
-    const user = await UserModel.findById(req.user._id)
-        .populate("blocked", "username name avatar")
-        .select("blocked")
-        .lean();
+  const userId = validateObjectId(req.user._id);
+  const cacheKey = getCacheKey.userBlocked(userId);
 
-    if (!user) {
-        throw createApiError(
-            HTTP_STATUS.NOT_FOUND,
-            ERROR_MESSAGES.USER_NOT_FOUND
-        );
-    }
+  // Try cache first
+  const cached = await pubClient.get(cacheKey);
+  if (cached) {
+    return sendSuccess(res, JSON.parse(cached));
+  }
 
-    sendSuccess(res, user.blocked || []);
+  const user = await UserModel.findById(userId)
+    .populate("blockedUsers", "username avatar")
+    .select("blockedUsers")
+    .lean();
+
+  if (!user) {
+    throw createApiError(HTTP_STATUS.NOT_FOUND, ERROR_MESSAGES.USER_NOT_FOUND);
+  }
+
+  const blockedUsers = user.blockedUsers || [];
+
+  // Cache the result
+  await pubClient.setex(cacheKey, CACHE_TTL.BLOCKED, JSON.stringify(blockedUsers));
+
+  sendSuccess(res, blockedUsers, "Blocked users fetched successfully");
 });
 
-/**
- * @desc    Block a user
- * @route   POST /api/v1/users/me/blocked/:userId
- * @access  Private
- */
+// Block a user
 export const blockUser = asyncHandler(async (req, res) => {
-    const { userId } = req.params;
+  const currentUserId = validateObjectId(req.user._id);
+  const { userId } = req.params;
 
-    // Cannot block yourself
-    if (userId === req.user._id.toString()) {
-        throw createApiError(
-            HTTP_STATUS.BAD_REQUEST,
-            "Cannot block yourself"
-        );
-    }
+  if (currentUserId === userId) {
+    throw createApiError(HTTP_STATUS.BAD_REQUEST, "Cannot block yourself");
+  }
 
-    // Check if user exists
-    const targetUser = await UserModel.findById(userId);
-    if (!targetUser) {
-        throw createApiError(
-            HTTP_STATUS.NOT_FOUND,
-            ERROR_MESSAGES.USER_NOT_FOUND
-        );
-    }
+  const targetUser = await UserModel.findById(userId);
+  if (!targetUser) {
+    throw createApiError(HTTP_STATUS.NOT_FOUND, ERROR_MESSAGES.USER_NOT_FOUND);
+  }
 
-    // Add to blocked list
-    await UserModel.findByIdAndUpdate(req.user._id, {
-        $addToSet: { blocked: userId },
-        $pull: { friends: userId }, // Remove from friends if they were friends
-    });
+  const currentUser = await UserModel.findById(currentUserId);
 
-    // Remove from other user's friends list
-    await UserModel.findByIdAndUpdate(userId, {
-        $pull: { friends: req.user._id },
-    });
+  // Add to blocked users
+  if (!currentUser.blockedUsers) {
+    currentUser.blockedUsers = [];
+  }
 
-    sendSuccess(res, null, "User blocked successfully");
+  if (currentUser.blockedUsers.includes(userId)) {
+    throw createApiError(HTTP_STATUS.BAD_REQUEST, "User already blocked");
+  }
+
+  currentUser.blockedUsers.push(userId);
+
+  // Remove from friends if they were friends
+  currentUser.friends = currentUser.friends.filter((id) => id.toString() !== userId);
+  targetUser.friends = targetUser.friends.filter(
+    (id) => id.toString() !== currentUserId,
+  );
+
+  await Promise.all([currentUser.save(), targetUser.save()]);
+
+  // Invalidate caches
+  await invalidateUserCache(currentUserId);
+
+  sendSuccess(res, null, "User blocked successfully");
 });
 
-/**
- * @desc    Unblock a user
- * @route   DELETE /api/v1/users/me/blocked/:userId
- * @access  Private
- */
+// Unblock a user
 export const unblockUser = asyncHandler(async (req, res) => {
-    const { userId } = req.params;
+  const currentUserId = validateObjectId(req.user._id);
+  const { userId } = req.params;
 
-    // Remove from blocked list
-    await UserModel.findByIdAndUpdate(req.user._id, {
-        $pull: { blocked: userId },
-    });
+  const currentUser = await UserModel.findById(currentUserId);
 
-    sendSuccess(res, null, "User unblocked successfully");
+  if (!currentUser.blockedUsers || !currentUser.blockedUsers.includes(userId)) {
+    throw createApiError(HTTP_STATUS.BAD_REQUEST, "User is not blocked");
+  }
+
+  currentUser.blockedUsers = currentUser.blockedUsers.filter(
+    (id) => id.toString() !== userId,
+  );
+
+  await currentUser.save();
+
+  // Invalidate cache
+  await invalidateUserCache(currentUserId);
+
+  sendSuccess(res, null, "User unblocked successfully");
 });
 
-export default {
-    getMe,
-    updateProfile,
-    changePassword,
-    deleteAccount,
-    uploadAvatar,
-    updateStatus,
-    getUserById,
-    searchUsers,
-    getUserServers,
-    getFriends,
-    addFriend,
-    removeFriend,
-    getBlockedUsers,
-    blockUser,
-    unblockUser,
-};
+// USER SEARCH & DISCOVERY
+// Search for users by username or email
+export const searchUsers = asyncHandler(async (req, res) => {
+  const { q: query, page = 1, limit = 20 } = req.query;
+  const cacheKey = getCacheKey.searchResults(query, page, limit);
+
+  // Try cache first
+  const cached = await pubClient.get(cacheKey);
+  if (cached) {
+    return sendSuccess(res, JSON.parse(cached));
+  }
+
+  const skip = (page - 1) * limit;
+
+  const users = await UserModel.find({
+    $or: [
+      { username: { $regex: query, $options: "i" } },
+      { name: { $regex: query, $options: "i" } },
+      { email: { $regex: query, $options: "i" } },
+    ],
+    _id: { $ne: req.user._id }, // Exclude current user
+  })
+    .select("username name avatar status bio")
+    .limit(parseInt(limit))
+    .skip(skip)
+    .lean();
+
+  const total = await UserModel.countDocuments({
+    $or: [
+      { username: { $regex: query, $options: "i" } },
+      { name: { $regex: query, $options: "i" } },
+      { email: { $regex: query, $options: "i" } },
+    ],
+    _id: { $ne: req.user._id },
+  });
+
+  const result = {
+    users,
+    pagination: {
+      page: parseInt(page),
+      limit: parseInt(limit),
+      total,
+      pages: Math.ceil(total / limit),
+    },
+  };
+
+  // Cache the result
+  await pubClient.setex(cacheKey, CACHE_TTL.USERS_LIST, JSON.stringify(result));
+
+  sendSuccess(res, result, "Users fetched successfully");
+});
+
+// Get user by ID
+export const getUserById = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+
+  const userId = validateObjectId(id);
+  const cacheKey = getCacheKey.user(userId);
+
+  // Try cache first
+  const cached = await pubClient.get(cacheKey);
+  if (cached) {
+    return sendSuccess(res, JSON.parse(cached));
+  }
+
+  const user = await UserModel.findById(userId)
+    .select("username name avatar status customStatus bio lastSeen")
+    .lean();
+
+  if (!user) {
+    throw createApiError(HTTP_STATUS.NOT_FOUND, ERROR_MESSAGES.USER_NOT_FOUND);
+  }
+
+  // Cache the result
+  await pubClient.setex(cacheKey, CACHE_TTL.USER, JSON.stringify(user));
+
+  sendSuccess(res, user, "User fetched successfully");
+});
