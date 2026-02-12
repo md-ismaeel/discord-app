@@ -9,6 +9,8 @@ import { RoleModel } from "../models/role.model.js";
 import { pubClient } from "../config/redis.config.js";
 import { emitToServer, emitToUser } from "../socket/socketHandler.js";
 import crypto from "crypto";
+import { HTTP_STATUS } from "../constants/httpStatus.js";
+import { validateObjectId } from "../utils/validateObjId.js";
 
 const CACHE_TTL = {
   INVITE: 1800, // 30 minutes
@@ -43,7 +45,10 @@ const checkMemberPermission = async (serverId, userId) => {
   });
 
   if (!membership) {
-    throw createApiError(403, ERROR_MESSAGES.NOT_SERVER_MEMBER);
+    throw createApiError(
+      HTTP_STATUS.FORBIDDEN,
+      ERROR_MESSAGES.NOT_SERVER_MEMBER,
+    );
   }
 
   return membership;
@@ -58,7 +63,10 @@ export const createInvite = asyncHandler(async (req, res) => {
   // Verify server exists
   const server = await ServerModel.findById(serverId);
   if (!server) {
-    throw createApiError(404, ERROR_MESSAGES.SERVER_NOT_FOUND);
+    throw createApiError(
+      HTTP_STATUS.NOT_FOUND,
+      ERROR_MESSAGES.SERVER_NOT_FOUND,
+    );
   }
 
   // Check if user is a member

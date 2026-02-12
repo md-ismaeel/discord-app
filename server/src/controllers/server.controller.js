@@ -8,6 +8,7 @@ import { ChannelModel } from "../models/channel.model.js";
 import { pubClient } from "../config/redis.config.js";
 import { ServerMemberModel } from "../models/serverMember.model.js";
 import { HTTP_STATUS } from "../constants/httpStatus.js";
+import { validateObjectId } from "../utils/validateObjId.js";
 
 // @desc    Create a new server
 export const createServer = asyncHandler(async (req, res) => {
@@ -15,7 +16,7 @@ export const createServer = asyncHandler(async (req, res) => {
 
   const existingServer = await ServerModel.findOne({
     name,
-    owner: req.user._id,
+    owner: validateObjectId(req.user._id),
   });
   if (existingServer) {
     throw createApiError(
@@ -30,12 +31,12 @@ export const createServer = asyncHandler(async (req, res) => {
     description,
     icon,
     isPublic,
-    owner: req.user._id,
+    owner: validateObjectId(req.user._id),
   });
 
   // Create server member entry for owner
   const ownerMember = await ServerMemberModel.create({
-    user: req.user._id,
+    user: validateObjectId(req.user._id),
     server: server._id,
     role: "owner",
   });
@@ -82,7 +83,7 @@ export const createServer = asyncHandler(async (req, res) => {
 export const getUserServers = asyncHandler(async (req, res) => {
   // Find all server memberships for the user
   const memberships = await ServerMemberModel.find({
-    user: req.user._id,
+    user: validateObjectId(req.user._id),
   }).select("server");
 
   const serverIds = memberships.map((m) => m.server);
@@ -107,7 +108,7 @@ export const getServer = asyncHandler(async (req, res) => {
     // Check if user is a member
     const isMember = await ServerMemberModel.exists({
       server: serverId,
-      user: req.user._id,
+      user: validateObjectId(req.user._id),
     });
 
     if (!isMember && !server.isPublic) {
@@ -132,7 +133,7 @@ export const getServer = asyncHandler(async (req, res) => {
   // Check if user is a member
   const isMember = await ServerMemberModel.exists({
     server: serverId,
-    user: req.user._id,
+    user: validateObjectId(req.user._id),
   });
 
   if (!isMember && !server.isPublic) {
@@ -157,7 +158,9 @@ export const updateServer = asyncHandler(async (req, res) => {
   }
 
   // Check if user is the owner
-  if (server.owner.toString() !== validateObjectId(req.user._id)) {
+  if (
+    server.owner.toString() !== validateObjectId(validateObjectId(req.user._id))
+  ) {
     throw createApiError(403, ERROR_MESSAGES.NOT_SERVER_OWNER);
   }
 
@@ -190,7 +193,9 @@ export const deleteServer = asyncHandler(async (req, res) => {
   }
 
   // Check if user is the owner
-  if (server.owner.toString() !== validateObjectId(req.user._id)) {
+  if (
+    server.owner.toString() !== validateObjectId(validateObjectId(req.user._id))
+  ) {
     throw createApiError(403, ERROR_MESSAGES.NOT_SERVER_OWNER);
   }
 
@@ -220,14 +225,16 @@ export const leaveServer = asyncHandler(async (req, res) => {
   }
 
   // Owner cannot leave their own server
-  if (server.owner.toString() === validateObjectId(req.user._id)) {
+  if (
+    server.owner.toString() === validateObjectId(validateObjectId(req.user._id))
+  ) {
     throw createApiError(400, SUCCESS_MESSAGES.SERVER_OWNER_NOT_LEAVE);
   }
 
   // Find and remove server member
   const membership = await ServerMemberModel.findOneAndDelete({
     server: serverId,
-    user: req.user._id,
+    user: validateObjectId(req.user._id),
   });
 
   if (!membership) {
@@ -260,7 +267,7 @@ export const updateMemberRole = asyncHandler(async (req, res) => {
   // Check if requester is owner or admin
   const requester = await ServerMemberModel.findOne({
     server: serverId,
-    user: req.user._id,
+    user: validateObjectId(req.user._id),
   });
 
   if (!requester || !["owner", "admin"].includes(requester.role)) {
@@ -308,7 +315,7 @@ export const kickMember = asyncHandler(async (req, res) => {
   // Check if requester is owner or admin
   const requester = await ServerMemberModel.findOne({
     server: serverId,
-    user: req.user._id,
+    user: validateObjectId(req.user._id),
   });
 
   if (!requester || !["owner", "admin"].includes(requester.role)) {
@@ -352,7 +359,7 @@ export const getServerMembers = asyncHandler(async (req, res) => {
   // Check if user is a member
   const isMember = await ServerMemberModel.exists({
     server: serverId,
-    user: req.user._id,
+    user: validateObjectId(req.user._id),
   });
 
   if (!isMember) {

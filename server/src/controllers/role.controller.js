@@ -70,7 +70,10 @@ export const createRole = asyncHandler(async (req, res) => {
   // Verify server exists
   const server = await ServerModel.findById(serverId);
   if (!server) {
-    throw createApiError(404, ERROR_MESSAGES.SERVER_NOT_FOUND);
+    throw createApiError(
+      HTTP_STATUS.NOT_FOUND,
+      ERROR_MESSAGES.SERVER_NOT_FOUND,
+    );
   }
 
   // Check for duplicate role name in the same server
@@ -172,7 +175,7 @@ export const getRole = asyncHandler(async (req, res) => {
   const role = await RoleModel.findById(roleId).lean();
 
   if (!role) {
-    throw createApiError(404, "Role not found");
+    throw createApiError(HTTP_STATUS.NOT_FOUND, "Role not found");
   }
 
   // Check if user is a server member
